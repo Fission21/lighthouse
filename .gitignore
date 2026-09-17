@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 config.local.json
+windows.local.json
 *.log
 
 # 说明：demo/project/docs/.env 是**故意提交**的演示用假密钥文件，

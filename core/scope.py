@@ -23,7 +23,22 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-STATE_ROOT = Path(os.path.expanduser(os.environ.get("LIGHTHOUSE_STATE", "~/.lighthouse")))
+
+def _state_root() -> Path:
+    """状态目录：环境变量 LIGHTHOUSE_STATE > 配置文件 state_dir > ~/.lighthouse。"""
+    env = os.environ.get("LIGHTHOUSE_STATE")
+    if env:
+        return Path(os.path.expanduser(env))
+    for name in ("config.local.json", "config.json"):
+        try:
+            cfg = json.loads((Path(__file__).resolve().parent.parent / name).read_text(encoding="utf-8"))
+            if cfg.get("state_dir"):
+                return Path(os.path.expanduser(cfg["state_dir"]))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return Path(os.path.expanduser("~/.lighthouse"))
+
+STATE_ROOT = _state_root()
 SCOPE_PATH = STATE_ROOT / "state" / "window-scope.json"
 CST = timezone(timedelta(hours=8))
 

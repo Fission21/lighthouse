@@ -7,8 +7,13 @@ import os
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = Path(os.environ.get("LIGHTHOUSE_CONFIG", str(ROOT_DIR / "config.json")))
-REGISTRY_PATH = Path(os.environ.get("LIGHTHOUSE_REGISTRY", str(ROOT_DIR / "windows.json")))
+# 优先用本机私有配置（*.local.json，不进版本库）；没有就用仓库里的示例配置
+_local_cfg = ROOT_DIR / "config.local.json"
+_local_reg = ROOT_DIR / "windows.local.json"
+CONFIG_PATH = Path(os.environ.get("LIGHTHOUSE_CONFIG",
+                                  str(_local_cfg if _local_cfg.exists() else ROOT_DIR / "config.json")))
+REGISTRY_PATH = Path(os.environ.get("LIGHTHOUSE_REGISTRY",
+                                    str(_local_reg if _local_reg.exists() else ROOT_DIR / "windows.json")))
 
 DEFAULTS: dict = {
     "hostname": "mcp.example.com",

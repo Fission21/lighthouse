@@ -40,8 +40,6 @@ PLIST = """<?xml version="1.0" encoding="UTF-8"?>
     <dict>
         <key>WINDOW_ID</key>
         <string>{wid}</string>
-        <key>LIGHTHOUSE_STATE</key>
-        <string>{state}</string>
     </dict>
     <key>WorkingDirectory</key>
     <string>{wd}</string>
@@ -64,7 +62,6 @@ After=network.target
 [Service]
 WorkingDirectory={wd}
 Environment=WINDOW_ID={wid}
-Environment=LIGHTHOUSE_STATE={state}
 ExecStart={py} {server}
 Restart=always
 RestartSec=3

@@ -40,9 +40,32 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 HERE = Path(__file__).resolve().parent
-REGISTRY_PATH = Path(os.path.expanduser(os.environ.get("WINDOW_REGISTRY", str(HERE.parent / "windows.json"))))
-# 状态目录：审计 / 备份 / 写开关都落在这里（可用环境变量 LIGHTHOUSE_STATE 改）
-STATE_ROOT = Path(os.path.expanduser(os.environ.get("LIGHTHOUSE_STATE", "~/.lighthouse")))
+def _default_registry() -> Path:
+    """优先 windows.local.json（本机私有），没有就用仓库里的 windows.json。"""
+    for name in ("windows.local.json", "windows.json"):
+        cand = HERE.parent / name
+        if cand.exists():
+            return cand
+    return HERE.parent / "windows.json"
+
+
+REGISTRY_PATH = Path(os.path.expanduser(os.environ.get("WINDOW_REGISTRY") or str(_default_registry())))
+
+def _state_root() -> Path:
+    """状态目录：环境变量 LIGHTHOUSE_STATE > 配置文件 state_dir > ~/.lighthouse。"""
+    env = os.environ.get("LIGHTHOUSE_STATE")
+    if env:
+        return Path(os.path.expanduser(env))
+    for name in ("config.local.json", "config.json"):
+        try:
+            cfg = json.loads((HERE.parent / name).read_text(encoding="utf-8"))
+            if cfg.get("state_dir"):
+                return Path(os.path.expanduser(cfg["state_dir"]))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return Path(os.path.expanduser("~/.lighthouse"))
+
+STATE_ROOT = _state_root()
 AUDIT_DIR = STATE_ROOT / "audit"
 BACKUP_DIR = STATE_ROOT / "backups"
 SWITCH_PATH = STATE_ROOT / "state" / "window-write.json"
