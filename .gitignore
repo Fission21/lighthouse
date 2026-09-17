@@ -1,0 +1,9 @@
+# 状态与运行时产物（不进版本库）
+__pycache__/
+*.pyc
+.DS_Store
+config.local.json
+*.log
+
+# 说明：demo/project/docs/.env 是**故意提交**的演示用假密钥文件，
+# 用来验证「密钥类文件读不到」。不要把它加进忽略列表。

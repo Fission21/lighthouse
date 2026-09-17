@@ -1,0 +1,9 @@
+{
+  "_comment": "灯塔全局配置。第一次用请改 hostname；出公网还需要 tunnel_id（见 README「接公网」）。",
+  "hostname": "mcp.example.com",
+  "spare_hostname": "",
+  "tunnel_name": "lighthouse",
+  "tunnel_id": "",
+  "cloudflared_config": "~/.cloudflared/lighthouse.yml",
+  "state_dir": "~/.lighthouse"
+}

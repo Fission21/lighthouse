@@ -1,0 +1,18 @@
+{
+  "_comment": "窗口注册表：每扇对外/对 AI 开的窗都在这里声明范围。root 之外一律拒；include/exclude 是 glob；deny_extra 是正则。visibility=local 的窗口发布时会被拦（防手滑）。",
+  "windows": {
+    "demo": {
+      "title": "示例项目（自带的演示，带着你把三套测试跑通）",
+      "root": "demo/project",
+      "include": ["**/*"],
+      "exclude": ["private/**"],
+      "deny_extra": [],
+      "port": 8951,
+      "path": "/mcp-demo-7g2xq1",
+      "visibility": "local",
+      "max_file_kb": 512,
+      "max_output_chars": 60000,
+      "write": { "enabled": true, "max_write_kb": 256, "backup": true }
+    }
+  }
+}

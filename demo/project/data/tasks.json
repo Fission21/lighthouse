@@ -1,0 +1,10 @@
+{
+  "project": "lighthouse-demo",
+  "tasks": [
+    { "id": 1, "title": "把示例窗跑起来", "status": "done", "owner": "you" },
+    { "id": 2, "title": "跑通三套测试", "status": "done", "owner": "you" },
+    { "id": 3, "title": "接一个网页 AI 试试", "status": "doing", "owner": "you" },
+    { "id": 4, "title": "给真实项目开一扇窗", "status": "todo", "owner": "you" }
+  ],
+  "updated": "2026-09-17"
+}
