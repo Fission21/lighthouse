@@ -54,6 +54,18 @@ PYEOF
 
   start)
     "$PY" "$CORE/render_services.py" >/dev/null || exit 1
+    # 端口占用告警：撞端口会导致服务一直重启失败
+    "$PY" - "$REGISTRY" <<'PYEOF'
+import json, socket, sys
+for wid, w in json.load(open(sys.argv[1]))["windows"].items():
+    if not w.get("enabled", True):
+        continue
+    port = w.get("port")
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            print(f"  ⚠️ 端口 {port} 已被占用（窗口 {wid}）——请改 windows.json 里的 port，或先停掉占用的程序")
+PYEOF
     if [ "$(plat)" = "Darwin" ]; then
       for id in $(ids); do
         if launchctl print "gui/$(id -u)/$(service_name "$id")" >/dev/null 2>&1; then
@@ -83,6 +95,46 @@ PYEOF
     ;;
 
   restart) "$0" stop; sleep 1; "$0" start ;;
+
+  status)
+    "$PY" - "$HERE" <<'PYEOF'
+import json, socket, subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "core"))
+import config as C
+import platform
+
+wins = C.windows(include_disabled=True)
+cfg = C.load()
+sw = {}
+try:
+    sw = json.loads((C.state_dir() / "state" / "window-write.json").read_text(encoding="utf-8"))
+except Exception:
+    pass
+
+print(f"状态目录: {C.state_dir()}    域名: {cfg['hostname']}    tunnel_id: {cfg['tunnel_id'] or '未配置'}")
+print(f"{'窗口':<12}{'服务':<10}{'端口':<12}{'范围':<28}{'写':<10}{'标题'}")
+for wid, w in wins.items():
+    on = w.get("enabled", True)
+    if platform.system() == "Darwin":
+        svc = "运行中" if subprocess.run(["launchctl", "print", f"gui/{__import__('os').getuid()}/com.lighthouse.window-{wid}"],
+                                          capture_output=True).returncode == 0 else ("未启动" if on else "已禁用")
+    else:
+        svc = "?" if on else "已禁用"
+    port = w.get("port")
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        listening = s.connect_ex(("127.0.0.1", port)) == 0
+    state = f"{port}{'✓' if listening else '✗'}"
+    inc = ",".join(w.get("include", []))[:26]
+    s = sw.get(wid, {})
+    wstate = "可写" if s.get("enabled") else "只读"
+    print(f"{wid:<12}{svc:<10}{state:<12}{inc:<28}{wstate:<10}{w.get('title', '')}")
+print()
+print("图例：端口 ✓=在监听 ✗=没在监听（服务没起来或被占用时这样）；写：可写=开关开着，默认全只读")
+PYEOF
+    ;;
 
   publish)
     echo "== 对外发布前检查（visibility）=="

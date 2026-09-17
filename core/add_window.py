@@ -23,6 +23,14 @@ HOME = str(Path.home())
 CLI = "bash lighthouse.sh"
 
 
+def _port_free(port: int) -> bool:
+    """端口没被占用才返回 True（避免和别的服务撞端口，撞了会一直重启失败）。"""
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("id", help="窗口 id（英文短名，如 miji）")
@@ -47,7 +55,7 @@ def main() -> int:
         return 1
 
     used_ports = {w.get("port") for w in wins.values()}
-    port = a.port or next((p for p in range(8940, 9000) if p not in used_ports), None)
+    port = a.port or next((p for p in range(8940, 9000) if p not in used_ports and _port_free(p)), None)
     if not port:
         print("❌ 没有空闲端口（8940-8999）")
         return 1

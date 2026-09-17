@@ -4,15 +4,23 @@
     "demo": {
       "title": "示例项目（自带的演示，带着你把三套测试跑通）",
       "root": "demo/project",
-      "include": ["**/*"],
-      "exclude": ["private/**"],
+      "include": [
+        "**/*"
+      ],
+      "exclude": [
+        "private/**"
+      ],
       "deny_extra": [],
       "port": 8951,
       "path": "/mcp-demo-7g2xq1",
       "visibility": "local",
       "max_file_kb": 512,
       "max_output_chars": 60000,
-      "write": { "enabled": true, "max_write_kb": 256, "backup": true }
+      "write": {
+        "enabled": true,
+        "max_write_kb": 256,
+        "backup": true
+      }
     }
   }
 }
