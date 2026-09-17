@@ -136,6 +136,83 @@ print("图例：端口 ✓=在监听 ✗=没在监听（服务没起来或被占
 PYEOF
     ;;
 
+  elevate)
+    # 预授权窗口：N 分钟内，agent 的范围申请在「上限」内自动批准
+    shift
+    id="${1:?用法: lighthouse.sh elevate <窗口id> [分钟数] [--scope \"src/**,*.py\"]}"; shift || true
+    mins=30; scope=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --scope) scope="$2"; shift 2 ;;
+        ''|*[!0-9]*) shift ;;
+        *) mins="$1"; shift ;;
+      esac
+    done
+    "$PY" - "$CORE" "$id" "$mins" "$scope" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import scope as S
+wid, mins, scope = sys.argv[2], sys.argv[3], sys.argv[4]
+allowed = [x.strip() for x in scope.split(",") if x.strip()] if scope else []
+arm = S.set_arm(wid, int(mins), allowed, note="CLI 预授权窗口")
+print(f"✅ 已开预授权窗口: {wid} — {mins} 分钟，范围上限 {allowed or '不限（申请多少批多少，密钥/exclude 仍不可见）'}")
+print("   期间 agent 调 request_access 会在上限内自动批准；到期自动失效。")
+print(f"   想提前收回：bash lighthouse.sh deny {wid}")
+PYEOF
+    ;;
+
+  approve)
+    # 批准 agent 的申请（不给 --scope 就用它申请的那套范围）
+    shift
+    id="${1:?用法: lighthouse.sh approve <窗口id> [--scope \"src/**\"] [--minutes N]}"; shift || true
+    minutes=""; scope=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --minutes) minutes="$2"; shift 2 ;;
+        --scope) scope="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    "$PY" - "$CORE" "$id" "$minutes" "$scope" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import scope as S
+wid, minutes, scope = sys.argv[2], sys.argv[3], sys.argv[4]
+pend = S.get_pending(wid) or {}
+include = [x.strip() for x in scope.split(",") if x.strip()] if scope else (pend.get("include") or [])
+if not include:
+    print(f"没有待批准的申请，也没给 --scope。用法：bash lighthouse.sh approve {wid} [--scope \"src/**\"] [--minutes 60]")
+    raise SystemExit(1)
+g = S.set_grant(wid, include, int(minutes) if minutes else None, note=(pend.get("reason") or "CLI 批准")[:200])
+print(f"✅ 已批准 {wid}：额外可见 {g['include']}")
+print("   有效期：" + ("无期限（用 `bash lighthouse.sh deny " + wid + "` 收回）" if not g["until"] else S._describe_until(g["until"])))
+if pend:
+    print("   （申请的缘因：" + (pend.get("reason") or "未填写") + "）")
+PYEOF
+    ;;
+
+  deny)
+    # 收回一切：已授予范围 + 待批申请 + 预授权窗口
+    id="${2:?用法: lighthouse.sh deny <窗口id>}"
+    "$PY" - "$CORE" "$id" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import scope as S
+S.clear_grant(sys.argv[2])
+print(f"🔒 已收回 {sys.argv[2]} 的全部提权（额外范围 / 待批申请 / 预授权窗口）——回到 windows.json 声明的范围")
+PYEOF
+    ;;
+
+  scope)
+    id="${2:?用法: lighthouse.sh scope <窗口id>}"
+    "$PY" - "$CORE" "$id" <<'PYEOF'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import scope as S
+print(json.dumps({sys.argv[2]: S.summary(sys.argv[2])}, ensure_ascii=False, indent=2))
+PYEOF
+    ;;
+
   publish)
     echo "== 对外发布前检查（visibility）=="
     blocked=$("$PY" - "$REGISTRY" <<'PYEOF'

@@ -4,7 +4,7 @@
 
 **把本地项目开成一扇窗，让网页 AI 看见 —— 只见你圈出来的那一部分。**
 
-四道闸 · 输出脱敏 · 全程审计 · 写开关（默认全只读）
+四道闸 · 输出脱敏 · 全程审计 · 写开关（默认全只读）· 提权要你点头 · 开窗先问你范围
 
 </div>
 
@@ -34,9 +34,10 @@
 | 它会不会看到我的 `.env` / 私钥？ | ④ 默认拉黑：`.env* / *.pem / id_rsa* / credentials* / *.db` 等无条件拒绝，include 写多宽都没用 |
 | 它会看到我明确划出去的东西吗？ | ② exclude 闸：目录命中连子树一起排除 |
 | 它会不会把我密钥抄进回答里？ | 输出脱敏：`sk-… / ghp_… / AIza… / AKIA… / Bearer … / 私钥块` → `«REDACTED»`，连检索片段也过一遍 |
-| 它会不会改我的代码？ | **默认全只读**。想让它动手，得你亲手开写开关（还能设 30 分钟自动关）；开着时每次改动先备份、后记 sha256 |
+| 它会不会改我的代码？ | **默认全只读。** 想让它动手，得你亲手开写开关（还能设 30 分钟自动关）；开着时每次改动先备份、后记 sha256 |
+| 它会不会自己把范围扩大？ | **不可能。** 它只能「申请」：`request_access` 默认只记成待批申请，批准权在你手里（`lighthouse.sh approve`），或者你先开一个限时预授权窗口（`elevate`）。提权也压不过 exclude 与密钥拉黑 |
 | 我怎么知道它看过什么？ | 审计日志：每次调用一行（含被拒的），`~/.lighthouse/audit/<窗口>.jsonl` |
-| 我怎么证明它真的挡得住？ | 自带三套测试（13 + 45 + 25 项），一条命令跑完 |
+| 我怎么证明它真的挡得住？ | 自带四套测试（13 + 45 + 25 + 18 项），一条命令跑完 |
 
 ## 快速开始（4 步）
 
@@ -45,14 +46,14 @@
 pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
-bash lighthouse.sh test            # 一键验收：起临时实例 → 跑三套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13   ✅ 只读审计 45/45   ✅ 写开关 25/25
+bash lighthouse.sh test            # 一键验收：起临时实例 → 跑四套测试 → 自动收拾
+#    ✅ 通用冒烟 13/13   ✅ 只读审计 45/45   ✅ 写开关 25/25   ✅ 提权 18/18
 
 # 2) 给【你自己的项目】开一扇窗
-bash lighthouse.sh new myproj ~/code/myproj \
-     --title "我的项目" \
-     --include "README.md,docs/**,src/**" \
-     --exclude "private/**,**/*.log"
+#    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
+bash lighthouse.sh new myproj ~/code/myproj
+#    也可以一次说清：
+bash lighthouse.sh new myproj ~/code/myproj --preset docs+code --title "我的项目"
 bash lighthouse.sh start
 bash lighthouse.sh url myproj      # 拿到本机地址，先自己试
 ```
@@ -84,9 +85,38 @@ bash lighthouse.sh url <id>              # 查地址（本机 / 公网）
 bash lighthouse.sh write <id> on 30      # 开 30 分钟写权限（到点自动关）
 bash lighthouse.sh write <id> off        # 立刻回到只读
 bash lighthouse.sh write status          # 现在谁能写
+bash lighthouse.sh scope <id>            # 当前授权状态（额外范围 / 待批申请 / 预授权窗口）
+bash lighthouse.sh approve <id>          # 批准它的提权申请
+bash lighthouse.sh elevate <id> 30 --scope "src/**"   # 预授权：30 分钟内这类申请自动批
+bash lighthouse.sh deny <id>             # 收回全部提权
 bash lighthouse.sh test [id]             # 一键验收
 bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 / 配置
 ```
+
+## 对话里提权：想看更多，得你点头
+
+场景：miji 那扇窗只给了文档。对话里你说「把代码也给它看」——它是怎么拿到的？
+
+```
+你（对话里）: 提高访问权限，允许看代码
+   │
+   ├─ agent 调 request_access(include=["src/**"], reason="用户要求看代码")
+   │      ├─ 有生效中的预授权窗口（你之前跑过 elevate）且在上限内 → 立即生效 ✅
+   │      └─ 没有 → 只记成【待批准申请】，范围一个字都不变 ⏸
+   │
+   ├─ agent 转达：请在部署这台机器的终端里执行 `bash lighthouse.sh approve <窗口>`
+   │
+   └─ 你敲完 approve → 立刻生效；到期/`deny` 自动收回
+```
+
+要点：
+
+- **agent 无法自我提权**：`request_access` 在没有你批准的情况下只能留下一条申请，`window_info` 里能查到；
+- **提权不等于解禁**：`.env`、私钥、`exclude` 的目录，提权之后照样看不到（拉黑与排除压过一切授予）；
+- **两种给法**：事后批准（`approve`，针对申请的那套范围）或事前预授权窗口（`elevate <id> 30 --scope "src/**"`，期间自动批、到期自动失效）；
+- **随时收回**：`deny <id>` 一把清空（额外范围 + 待批申请 + 预授权窗口）。
+
+这就是「把选择的权利交给主人」的落地方式：**方便归方便，闸门永远在你手里。**
 
 ## 目录结构
 
@@ -96,9 +126,10 @@ lighthouse/
 ├── config.json              # 全局配置：域名 / 隧道 / 状态目录
 ├── windows.json             # 窗口注册表：每扇窗的给看范围写在这里
 ├── core/
-│   ├── server.py            # 窗口 MCP 服务（四道闸 + 脱敏 + 审计 + 写工具）
+│   ├── server.py            # 窗口 MCP 服务（四道闸 + 脱敏 + 审计 + 写工具 + 提权申请）
 │   ├── config.py            # 配置读写
-│   ├── add_window.py        # 登记新窗口
+│   ├── scope.py             # 范围授权（grant / pending / arm 三层状态）
+│   ├── add_window.py        # 登记新窗口（不给范围时会问你）
 │   ├── render_services.py   # 生成 launchd / systemd 服务定义
 │   ├── render_ingress.py    # 生成隧道配置（单域名 + 路径分流）
 │   └── switch.py            # 写开关
@@ -106,6 +137,7 @@ lighthouse/
 │   ├── smoke_window.py      # 通用冒烟 13 项（任何窗口都能测）
 │   ├── audit_readonly.py    # 只读审计 45 项（含文件指纹前后比对）
 │   ├── test_write.py        # 写开关 25 项（关=全拒 / 开=全流程 / 关回=只读）
+│   ├── test_elevate.py      # 提权 18 项（申请≠授予 / 批准 / 收回 / 预授权 / 过期）
 │   └── run_all_tests.sh     # 一键验收（自带临时实例，不碰线上）
 ├── demo/project/            # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/

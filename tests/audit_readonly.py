@@ -30,7 +30,7 @@ if len(sys.argv) < 2:
 URL = sys.argv[1]
 ROOT = Path(sys.argv[2] if len(sys.argv) > 2 else ".").expanduser().resolve()
 
-READ_ONLY_ALLOWLIST = {"window_info", "list_files", "read_file", "search"}
+READ_ONLY_ALLOWLIST = {"window_info", "list_files", "read_file", "search", "request_access"}
 EXPECTED_TOOLS = READ_ONLY_ALLOWLIST | {"write_file", "edit_file", "make_dir", "delete_file"}
 WRITE_TOOL_NAMES = [
     "write_file", "create_file", "save_file", "edit_file", "patch_file", "apply_patch",
@@ -96,10 +96,12 @@ async def main() -> int:
             print("① 工具清单审计")
             tools = [t.name for t in (await session.list_tools()).tools]
             print(f"  暴露的工具: {tools}")
-            check("工具集合与设计一致（4 读 + 4 写，写工具受开关约束）", set(tools) == EXPECTED_TOOLS,
+            check("工具集合与设计一致（4 读 + 1 提权申请 + 4 写，写工具受开关约束）", set(tools) == EXPECTED_TOOLS,
                   f"意外工具: {set(tools) - EXPECTED_TOOLS}" if set(tools) - EXPECTED_TOOLS else "")
             write_tools = set(tools) & {"write_file", "edit_file", "make_dir", "delete_file"}
             check("写工具已登记（锁在开关后）", write_tools == {"write_file", "edit_file", "make_dir", "delete_file"})
+            check("提权工具是申请制（request_access 存在，且没有直接授权类工具）",
+                  "request_access" in tools and not ({"grant_access", "set_scope", "approve"} & set(tools)))
 
             # ② 写类工具名轰炸
             print("\n② 写入尝试（应全部失败）")

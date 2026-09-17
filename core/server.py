@@ -47,6 +47,10 @@ AUDIT_DIR = STATE_ROOT / "audit"
 BACKUP_DIR = STATE_ROOT / "backups"
 SWITCH_PATH = STATE_ROOT / "state" / "window-write.json"
 CLI_HINT = os.environ.get("LIGHTHOUSE_CLI", "bash lighthouse.sh")
+
+import sys as _sys
+_sys.path.insert(0, str(HERE))
+import scope as SCOPE  # noqa: E402  （范围授权：grant / pending / arm）
 CST = timezone(timedelta(hours=8))
 
 # ---------------------------------------------------------------- 默认拉黑（路径级）
@@ -168,9 +172,19 @@ class Window:
             sub = "/".join(parts[:i])
             if any(p.match(sub) for p in self.exclude):
                 return False, "不在给看范围（被 exclude 排除）"
-        if not any(p.match(rel) for p in self.include):
+        if not any(p.match(rel) for p in self.effective_include()):
             return False, "不在给看范围（不匹配 include）"
         return True, ""
+
+    def effective_include(self) -> list[re.Pattern]:
+        """注册表 include + 主人已授予的额外范围（grant）。exclude 与默认拉黑不受影响。"""
+        pats = list(self.include)
+        for extra in SCOPE.grant_include(self.id):
+            try:
+                pats.append(_glob_to_re(extra))
+            except Exception:  # noqa: BLE001 —— 坏规则就当没授过
+                continue
+        return pats
 
     def resolve(self, rel: str) -> tuple[Path | None, str]:
         try:
@@ -196,6 +210,16 @@ class Window:
             "denied_by_default": ["密钥/凭据/数据库/SSH 等"],
             "max_file_kb": self.max_file_kb,
             "visibility": self.visibility,
+            "include_effective": list(self.cfg.get("include", ["**/*"])) + SCOPE.grant_include(self.id),
+            "scope_elevation": {
+                **SCOPE.summary(self.id),
+                "how_to_ask": (
+                    "需要看更多时，让 agent 调 request_access(reason, include) 提出申请——"
+                    "它只能申请，批准权在主人手里。主人在部署机器上批准：`lighthouse.sh approve <窗口>`；"
+                    "或先开一个预授权窗口：`lighthouse.sh elevate <窗口> 30 [--scope \"src/**\"]`。"
+                    "注意：exclude 与密钥默认拉黑永远不受提权影响。"
+                ),
+            },
             "write": {
                 "master_enabled": master,
                 "switch_on": bool(sw.get("enabled")),
@@ -326,7 +350,8 @@ def _iter_files(base: Path, depth: int):
 @server.tool(description="本窗口的给看范围声明：根目录、include/exclude、上限、可见性。")
 def window_info() -> str:
     _audit("window_info", {}, True)
-    return _dump({**WIN.scope_summary(), "tools": ["window_info", "list_files", "read_file", "search"]})
+    return _dump({**WIN.scope_summary(),
+                  "tools": ["window_info", "list_files", "read_file", "search", "request_access"]})
 
 
 @server.tool(description="列出窗口范围内的文件（越界/拉黑文件不会出现）。path 为窗口内相对路径，depth 默认 3。")
@@ -416,6 +441,66 @@ def search(keyword: str, limit: int = 20) -> str:
 
 
 # ---------------------------------------------------------------- 写工具（受开关控制）
+
+# ---------------------------------------------------------------- 提权申请
+BAD_PAT = re.compile(r"(^/|\.\.)")
+
+
+def _validate_patterns(include: list[str]) -> tuple[list[str], str]:
+    if not include:
+        return [], "include 不能为空（给个 glob 列表，例如 [\"src/**\", \"*.py\"]）"
+    if len(include) > 20:
+        return [], "一次最多申请 20 条规则"
+    clean = []
+    for pat in include:
+        if not isinstance(pat, str):
+            return [], "include 必须是字符串列表"
+        pat = pat.strip()
+        if not pat or len(pat) > 200:
+            return [], f"规则长度不合法: {pat[:30]!r}"
+        if BAD_PAT.search(pat):
+            return [], f"规则不能是绝对路径或包含 ..: {pat!r}"
+        clean.append(pat)
+    return clean, ""
+
+
+@server.tool(description="【申请】申请扩大本窗口的给看范围（例如从「只能看文档」提到「也能看代码」）。"
+                         "默认只会记成【待批准申请】——agent 无法自我提权，批准权在主人手里；"
+                         "若主人已开预授权窗口，则在授权上限内自动生效。密钥默认拉黑与 exclude 永远不受影响。")
+def request_access(include: list[str], reason: str = "") -> str:
+    clean, bad = _validate_patterns(include)
+    if bad:
+        _audit("request_access", {"include": include, "reason": reason}, False, {"reason": bad})
+        return _dump({"error": bad, "window": WIN.id})
+
+    ok, why = SCOPE.arm_allows(WIN.id, clean)
+    arm = SCOPE.active_arm(WIN.id)
+    if ok and arm:
+        minutes = max(1, int((float(arm["until"]) - time.time()) // 60) or 1)
+        g = SCOPE.set_grant(WIN.id, clean, minutes, note=f"预授权自动批准：{reason}"[:200], by="elevation-window")
+        _audit("request_access", {"include": clean, "reason": reason}, True, {"granted": g["include"], "until": g["until"]})
+        return _dump({
+            "status": "granted",
+            "window": WIN.id,
+            "now_visible": clean,
+            "until": g["until"],
+            "message": "已在预授权窗口内批准。现在可以读这些范围了；到期自动收回。",
+        })
+
+    pending = SCOPE.set_pending(WIN.id, clean, reason)
+    _audit("request_access", {"include": clean, "reason": reason}, True, {"pending": True, "note": why})
+    return _dump({
+        "status": "pending",
+        "window": WIN.id,
+        "requested": clean,
+        "reason": reason,
+        "message": ("申请已记录，等主人批准。请把下面这句话原样转达给用户：\n"
+                    f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
+                    + (f"\n（预授权检查：{why}）" if arm is not None else "")),
+        "note": "agent 无法自我提权：没有主人的批准，这个申请不会改变任何可见范围。",
+    })
+
+
 def _sha(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
