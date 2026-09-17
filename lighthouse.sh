@@ -10,8 +10,12 @@
 #   list                 列出窗口 id
 #   url <id> [--public]  打印窗口地址（本机 / 公网）
 #   publish              生成隧道配置 + 重启隧道 + 公网健康检查（会拦 visibility=local 的窗口）
-#   write <id> on [分钟] | off | status     写开关（默认全只读）
-#   test [id]            一键验收（起临时实例跑三套测试，不需要公网）
+#   write <id> on [分钟] | off | status    写开关（默认全只读）
+#   elevate <id> [分钟] [--scope "src/**"]  预授权窗口：期间 agent 的范围申请在上限内自动批
+#   approve <id> [--scope ...] [--minutes N] 批准 agent 的范围申请
+#   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
+#   scope <id>                              看当前授权状态
+#   test [id]            一键验收（起临时实例跑四套测试，不需要公网）
 #   doctor               体检：解释器 / mcp 依赖 / cloudflared / 配置
 set -uo pipefail
 
