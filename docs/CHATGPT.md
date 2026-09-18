@@ -49,7 +49,7 @@
 | 创建时报连不上 | 先用 `publish` 的健康检查确认公网 200；确认 URL 里的路径段完整（随机段不能少） |
 | 本机访问 200，公网 404 | MCP 的 DNS 重绑定保护（服务端已内置关闭）；或隧道 ingress 缺这条 path |
 | 回答卡在第一个字 | 生成其实已完成，刷新页面 |
-| **提示「此工具调用被 OpenAI 的安全检查屏蔽」** | 这是 **OpenAI 平台侧**的内容审查拦住了工具调用，**不是灯塔拒的**。判断依据：`tail ~/.lighthouse/audit/<窗口>.jsonl` —— **没有**对应记录，说明请求根本没发到你机器上。<br>已知会被拦的例子：连续多次文件系统调用、读取名字含 `config` / `settings` 的路径。<br>应对：① 隔几分钟重试（多为临时风控）；② 一次只让它做一件事，别让它「批量读取」；③ 要稳定读写就走**本机 MCP 客户端**（Claude Desktop / Codex / Cursor 直连 `http://127.0.0.1:<端口>/<路径>`）—— 不经过公网，也就没有这一层审查 |
+| **提示「此工具调用被 OpenAI 的安全检查屏蔽」** | 这是 **OpenAI 平台侧**的内容审查拦住了工具调用，**不是灯塔拒的**。判断依据：`tail ~/.lighthouse/audit/<窗口>.jsonl` —— **没有**对应记录，说明请求根本没发到你机器上。<br>已知会被拦的例子：连续多次文件系统调用、读取名字含 `config` / `settings` 的路径。<br>应对：① 隔几分钟重试（多为临时风控）；② 一次只让它做一件事，别让它「批量读取」；③ 要稳定读写就走**本机 MCP 客户端**（Claude Desktop / Codex / Cursor 直连 `http://127.0.0.1:<端口>/<路径>`）—— 不经过公网，也就没有这一层审查 |<br>**若被拦的正是「申请提权」（`request_access`）**：改成**你主动授予**，根本不让它申请 —— `bash lighthouse.sh approve <窗口> --scope "private/**"`（没有待批申请也能用）。之后它直接就能读，绕开这个拦截点。
 | 想让它改文件 | `bash lighthouse.sh write <id> on 30`（30 分钟自动关）；不用了 `… off` |
 | 想让它看更多 | 对话里说「提高访问权限」「代码也给它看」→ 它会调 `request_access` 申请 → 你在机器上 `bash lighthouse.sh approve <id>`。想省去每次批：`bash lighthouse.sh elevate <id> 30 --scope "src/**"`（限时预授权）或 `bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"]`（常驻策略：上限内的申请直接生效）。注意 ChatGPT 那个「允许使用 X？」弹窗属于平台侧、**不一定会出现**，它不等于灯塔的授权 |
 | 想收回权限 | `bash lighthouse.sh deny <id>`（额外范围 / 待批申请 / 预授权窗口一把清空） |
