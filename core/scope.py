@@ -187,6 +187,23 @@ def arm_allows(wid: str, include: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
+# ---------------------------------------------------------------- ceiling（常驻自动授权上限）
+def ceiling_allows(ceiling: list[str], include: list[str]) -> tuple[bool, str]:
+    """申请范围是否**完整**落在主人写在 windows.json 的常驻上限内。
+
+    ceiling 为空 = 主人没设上限（语义由调用方决定：不作限制）。
+    只做保守判断：任一条申请不被任何一条 ceiling 覆盖 → 不算过。
+    """
+    if not include:
+        return False, "申请范围为空"
+    if not ceiling:
+        return True, ""
+    for pat in include:
+        if not any(_glob_covers(c, pat) for c in ceiling):
+            return False, f"申请的范围 {pat!r} 超出常驻上限 {ceiling}"
+    return True, ""
+
+
 def summary(wid: str) -> dict:
     """给人看的当前授权状态。"""
     data = load().get(wid, {})

@@ -39,9 +39,9 @@
 | 它会看到我明确划出去的东西吗？ | ② exclude 闸：目录命中连子树一起排除 |
 | 它会不会把我密钥抄进回答里？ | 输出脱敏：`sk-… / ghp_… / AIza… / AKIA… / Bearer … / 私钥块` → `«REDACTED»`，连检索片段也过一遍 |
 | 它会不会改我的代码？ | **默认全只读。** 想让它动手，得你亲手开写开关（还能设 30 分钟自动关）；开着时每次改动先备份、后记 sha256 |
-| 它会不会自己把范围扩大？ | **不可能。** 它只能「申请」：`request_access` 默认只记成待批申请，批准权在你手里（`lighthouse.sh approve`），或者你先开一个限时预授权窗口（`elevate`）。提权也压不过 exclude 与密钥拉黑 |
+| 它会不会自己把范围扩大？ | **默认不会。** 它只能「申请」：`request_access` 默认只记成待批申请，批准权在你手里（`lighthouse.sh approve`），或你先开限时预授权窗口（`elevate`）。也可以给某扇窗声明常驻策略 `auto-grant`（可带 `--ceiling` 上限），之后上限内的申请直接生效——超出上限的照样要你点头。提权永远压不过 exclude 与密钥拉黑 |
 | 我怎么知道它看过什么？ | 审计日志：每次调用一行（含被拒的），`~/.lighthouse/audit/<窗口>.jsonl` |
-| 我怎么证明它真的挡得住？ | 自带四套测试（13 + 46 + 25 + 18 项），一条命令跑完 |
+| 我怎么证明它真的挡得住？ | 自带四套测试（13 + 46 + 25 + 28 项），一条命令跑完 |
 
 ## 跑起来需要什么（前置，先看这个）
 
@@ -128,20 +128,24 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 你（对话里）: 提高访问权限，允许看代码
    │
    ├─ agent 调 request_access(include=["src/**"], reason="用户要求看代码")
+   │      ├─ 该窗口开了常驻策略 auto-grant，且申请在上限内 → 立即生效 ✅（你不用跑任何命令）
    │      ├─ 有生效中的预授权窗口（你之前跑过 elevate）且在上限内 → 立即生效 ✅
-   │      └─ 没有 → 只记成【待批准申请】，范围一个字都不变 ⏸
+   │      └─ 都不是 / 超出上限 → 只记成【待批准申请】，范围一个字都不变 ⏸
+   │                                └─ 你敲 approve → 立刻生效；`deny` 随时收回
    │
-   ├─ agent 转达：请在部署这台机器的终端里执行 `bash lighthouse.sh approve <窗口>`
-   │
-   └─ 你敲完 approve → 立刻生效；到期/`deny` 自动收回
+   └─ agent 转达：请在部署这台机器的终端里执行 `bash lighthouse.sh approve <窗口>`
 ```
 
 要点：
 
-- **agent 无法自我提权**：`request_access` 在没有你批准的情况下只能留下一条申请，`window_info` 里能查到；
+- **默认 agent 无法自我提权**：没有主人的批准，`request_access` 只能留下一条申请，`window_info` 里能查到；
+- **常驻策略是「你事先授权」**：`bash lighthouse.sh auto-grant <窗口> on --ceiling "src/**,docs/**"`
+  之后，落在上限内的申请直接生效、不用再跑命令；超出上限的照样转成待批。
+  不设 `--ceiling` 就是「任何范围申请都自动生效」（密钥拉黑与 exclude 仍然拦得住）。
+  策略是**实时读的**：`off` 一敲，下一次申请立刻回到 pending，不用重启服务；
 - **提权不等于解禁**：`.env`、私钥、`exclude` 的目录，提权之后照样看不到（拉黑与排除压过一切授予）；
-- **两种给法**：事后批准（`approve`，针对申请的那套范围）或事前预授权窗口（`elevate <id> 30 --scope "src/**"`，期间自动批、到期自动失效）；
-- **随时收回**：`deny <id>` 一把清空（额外范围 + 待批申请 + 预授权窗口）。
+- **三种给法**：常驻策略（`auto-grant`）、事后批准（`approve`）、事前预授权窗口（`elevate <id> 30 --scope "src/**"`，到期自动失效）；
+- **随时收回**：`deny <id>` 一把清空（额外范围 + 待批申请 + 预授权窗口）；`auto-grant <id> off` 关掉常驻策略。
 
 这就是「把选择的权利交给主人」的落地方式：**方便归方便，闸门永远在你手里。**
 
@@ -155,7 +159,7 @@ lighthouse/
 ├── core/
 │   ├── server.py            # 窗口 MCP 服务（四道闸 + 脱敏 + 审计 + 写工具 + 提权申请）
 │   ├── config.py            # 配置读写
-│   ├── scope.py             # 范围授权（grant / pending / arm 三层状态）
+│   ├── scope.py             # 范围授权（grant / pending / arm / ceiling 上限判定）
 │   ├── add_window.py        # 登记新窗口（不给范围时会问你）
 │   ├── render_services.py   # 生成 launchd / systemd 服务定义
 │   ├── render_ingress.py    # 生成隧道配置（单域名 + 路径分流）
@@ -221,6 +225,10 @@ Cloudflare 的 cloudflared 让「不出站也安全」变成了默认选项。�
 
 ## 更新日志
 
+- **v1.2** —— 常驻提权策略 `auto-grant`（`bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"] | off | status`）：
+  开启后**上限内的申请立即生效，不用再跑本地命令**；超出上限仍转待批；策略实时读注册表，`off` 一敲立刻收紧（不用重启服务）；
+  配置可疑一律 fail-closed。修两处：CLI 与服务的注册表路径统一（`LIGHTHOUSE_REGISTRY` > `WINDOW_REGISTRY`，此前 CLI 可能改到另一份文件），
+  `restart` 不再因 `$0` 是相对路径而「command not found」。第 4 套测试扩到 28 项，测试总数 112 项。
 - **v1.1** —— 对话内提权（`request_access` 申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围（不给范围时会问主人，脚本环境拒绝静默默认）+ 第 4 套测试（提权 18 项）+ 本机私有配置 `*.local.json` 约定。测试总数 102 项。
 - **v1.0** —— 首个开源版本：四道闸、脱敏、审计、写开关（两级锁）、三套自带测试、多窗口路径分流、launchd/systemd 服务生成。
 

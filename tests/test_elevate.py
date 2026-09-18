@@ -12,6 +12,8 @@
   ⑤ 主人收回（deny）→ 回到原始范围
   ⑥ 预授权窗口（elevate）：上限内的申请自动批准；超出上限的申请仍转 pending
   ⑦ 过期即失效
+  ⑧ 常驻策略（auto-grant）：开启后上限内申请立即生效；超出上限仍 pending；
+     关闭后立即回到 pending；上限配置可疑时 fail-closed；拉黑始终压过自动授予
 
 用法: python3 test_elevate.py [--keep]
 """
@@ -87,6 +89,7 @@ async def main() -> int:
     env = {**os.environ,
            "LIGHTHOUSE_STATE": str(state),
            "LIGHTHOUSE_PY": PY,
+           "LIGHTHOUSE_REGISTRY": str(registry),
            "WINDOW_ID": "elev", "WINDOW_PORT": str(port), "WINDOW_PATH": "/w-elev-test",
            "WINDOW_REGISTRY": str(registry)}
     url = f"http://127.0.0.1:{port}/w-elev-test"
@@ -133,8 +136,13 @@ async def main() -> int:
                 print("\n④ 提权不能突破默认拉黑 / 排除")
                 envf = await call(session, "read_file", {"path": "docs/.env"})
                 check(".env 仍被拒（拉黑压过提权）", "拉黑" in json.dumps(envf, ensure_ascii=False), envf.get("error", "")[:40])
-                esc = await call(session, "read_file", {"path": "../../etc/passwd"})
-                check("越界仍被拒", "越界" in json.dumps(esc, ensure_ascii=False) or "给看范围" in json.dumps(esc, ensure_ascii=False))
+                esc = await call(session, "read_file", {"path": "../../etc/hosts"})
+                esc_blob = json.dumps(esc, ensure_ascii=False)
+                check("越界仍被拒（路径逃逸）", "越界" in esc_blob or "给看范围" in esc_blob, esc.get("error", "")[:50])
+                esc2 = await call(session, "read_file", {"path": "../../etc/passwd"})
+                check("越界 + 敏感名 → 仍被拒", "越界" in json.dumps(esc2, ensure_ascii=False)
+                      or "给看范围" in json.dumps(esc2, ensure_ascii=False)
+                      or "拉黑" in json.dumps(esc2, ensure_ascii=False), esc2.get("error", "")[:50])
 
                 print("\n⑤ 主人收回 → 回到原始范围")
                 out = cli("deny", "elev", env=env)
@@ -162,6 +170,43 @@ async def main() -> int:
                 scope_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
                 c6 = await call(session, "read_file", {"path": "code/app.py"})
                 check("过期后自动失效（回到原始范围）", "不在给看范围" in json.dumps(c6, ensure_ascii=False))
+
+                print("\n⑧ 常驻策略（auto-grant）：开了之后上限内的申请立即生效，不用再跑本地命令")
+                cli("deny", "elev", env=env)                      # 清掉预授权窗口，确保测的是常驻策略
+                g3 = await call(session, "request_access", {"include": ["code/**"], "reason": "默认没开策略"})
+                check("默认（未开 auto-grant）申请仍只得到 pending", g3.get("status") == "pending",
+                      json.dumps(g3, ensure_ascii=False)[:80])
+
+                out = cli("auto-grant", "elev", "on", "--ceiling", "code/**", env=env)
+                check("CLI auto-grant on 成功", "申请即授予" in out, out.splitlines()[0][:70] if out else "")
+                g4 = await call(session, "request_access", {"include": ["code/**"], "reason": "上限内申请"})
+                check("上限内申请立即生效（无需本地命令）", g4.get("status") == "granted",
+                      json.dumps(g4, ensure_ascii=False)[:80])
+                c7 = await call(session, "read_file", {"path": "code/app.py"})
+                check("自动生效后代码可读", bool(c7.get("content")))
+                g5 = await call(session, "request_access", {"include": ["**/*"], "reason": "想全都要"})
+                check("超出常驻上限仍转 pending", g5.get("status") == "pending", json.dumps(g5, ensure_ascii=False)[:80])
+                envf2 = await call(session, "read_file", {"path": "docs/.env"})
+                check("自动授予也读不到 .env（拉黑优先）", "拉黑" in json.dumps(envf2, ensure_ascii=False))
+                info2 = await call(session, "window_info", {})
+                check("window_info 暴露常驻策略", info2.get("scope_elevation", {}).get("auto_grant") is True,
+                      json.dumps(info2.get("scope_elevation", {}), ensure_ascii=False)[:80])
+
+                out = cli("auto-grant", "elev", "off", env=env)
+                check("CLI auto-grant off 成功", "已关闭" in out, out.splitlines()[0][:60] if out else "")
+                cli("deny", "elev", env=env)
+                g6 = await call(session, "request_access", {"include": ["code/**"], "reason": "关掉策略之后"})
+                check("收紧后立即回到 pending（不重启也生效）", g6.get("status") == "pending",
+                      json.dumps(g6, ensure_ascii=False)[:80])
+
+                reg = json.loads(registry.read_text(encoding="utf-8"))
+                reg["windows"]["elev"]["auto_grant"] = True
+                reg["windows"]["elev"]["elevation_ceiling"] = ["/etc/**"]      # 绝对路径：非法配置
+                registry.write_text(json.dumps(reg, ensure_ascii=False), encoding="utf-8")
+                cli("deny", "elev", env=env)
+                g7 = await call(session, "request_access", {"include": ["code/**"], "reason": "配置可疑"})
+                check("上限配置可疑时退化成 pending（fail-closed）", g7.get("status") == "pending",
+                      json.dumps(g7, ensure_ascii=False)[:80])
 
     finally:
         srv.terminate()

@@ -4,7 +4,7 @@
 # 用法: bash tests/run_all_tests.sh [窗口id] [端口]
 #   默认拿注册表里的第一个窗口（示例仓库里是 demo），在 127.0.0.1 上起一份临时实例，
 #   四套测试跑完后自动关掉临时实例、清掉测试件。不需要公网、不需要隧道。
-#   第 4 套（提权）自带隔离环境，不碰 windows.json 与 ~/.lighthouse。
+#   第 4 套（提权）与第 5 套（加固）自带隔离环境，不碰 windows.json 与 ~/.lighthouse。
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -93,7 +93,8 @@ PYEOF
 run "通用冒烟(13项)"  "$PY" "$HERE/smoke_window.py"  "$URL"
 run "只读审计(45项)"  "$PY" "$HERE/audit_readonly.py" "$URL" "$WROOT"
 run "写开关(25项)"    "$PY" "$HERE/test_write.py"    "$URL" "$WIN" "$WROOT"
-run "提权(18项)"      "$PY" "$HERE/test_elevate.py"
+run "提权(29项)"      "$PY" "$HERE/test_elevate.py"
+run "加固(23项)"      "$PY" "$HERE/test_hardening.py"
 
 echo
 echo "════════ 结果：$pass 套通过 / $fail 套失败 ════════"

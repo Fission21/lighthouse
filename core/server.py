@@ -73,20 +73,23 @@ CLI_HINT = os.environ.get("LIGHTHOUSE_CLI", "bash lighthouse.sh")
 
 import sys as _sys
 _sys.path.insert(0, str(HERE))
-import scope as SCOPE  # noqa: E402  （范围授权：grant / pending / arm）
+import scope as SCOPE  # noqa: E402  （范围授权：grant / pending / arm / ceiling）
+import config as CONF  # noqa: E402  （窗口提权策略：auto_grant / elevation_ceiling）
 CST = timezone(timedelta(hours=8))
 
 # ---------------------------------------------------------------- 默认拉黑（路径级）
 DENY_PATTERNS = [
-    r"(^|/)\.env(\..*)?$",
-    r"\.(pem|key|p12|pfx|kdbx|keystore|jks)$",
-    r"(^|/)id_(rsa|dsa|ecdsa|ed25519)(\..*)?$",
-    r"(^|/)(creds?|credentials?|secrets?|tokens?|passwords?)(\.[A-Za-z0-9]+)?$",
-    r"(^|/)\.(ssh|aws|gnupg|docker)/",
-    r"\.(sqlite3?|db|mdb|bak|license|licence)$",
-    r"(^|/)\.netrc$",
-    r"(^|/)\.npmrc$",
-    r"(^|/)\.git/config$",
+    # ⚠️ 一律大小写不敏感编译（见下方 Window.deny 的 IGNORECASE）。
+    #    在 macOS/Windows 这类大小写不敏感的文件系统上，`docs/.ENV` 与 `docs/.env` 是同一个文件，
+    #    大小写敏感的规则会被「一个字母换大小写」直接绕过 —— 这是实测出来的洞。
+    r"(^|/)[^/]*\.env(\.[A-Za-z0-9_-]+)?$",                       # .env / .env.local / config.env / prod.env
+    r"(^|/)[^/]*\.(pem|key|p12|pfx|ppk|kdbx|keystore|jks)$",      # 私钥 / 证书 / 密钥库
+    r"(^|/)id_(rsa|dsa|ecdsa|ed25519)(\..*)?$",                   # SSH 私钥
+    r"(^|/)[^/]*(secrets?|credentials?|passwords?|passwd|apikeys?|api[_-]keys?|tokens?)(\.[A-Za-z0-9]+)?$",
+    r"(^|/)\.(ssh|aws|gnupg|docker|kube)(/|$)",                   # 凭据目录
+    r"(^|/)\.(netrc|npmrc|pgpass|htpasswd|my\.cnf)$",
+    r"(^|/)[^/]*\.(sqlite3?|db|mdb|bak|license|licence)$",
+    r"(^|/)\.git(/|$)",                                           # 版本库内部：config/logs/objects 可能藏着历史里的密钥
 ]
 
 # ---------------------------------------------------------------- 脱敏（内容级）
@@ -142,7 +145,9 @@ def _glob_to_re(pat: str) -> re.Pattern:
         else:
             out.append(re.escape(c))
         i += 1
-    return re.compile("^" + "".join(out) + "$")
+    # IGNORECASE 是安全必需，不是便利：文件系统大小写不敏感时（macOS/Windows），
+    # 字符串比较必须与文件系统语义一致，否则 `PRIVATE/x` 能绕过 exclude `private/**`。
+    return re.compile("^" + "".join(out) + "$", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------- 写开关
@@ -167,7 +172,8 @@ class Window:
         self.root = _root.resolve()
         self.include = [_glob_to_re(p) for p in cfg.get("include", ["**/*"])]
         self.exclude = [_glob_to_re(p) for p in cfg.get("exclude", [])]
-        self.deny = [re.compile(p) for p in DENY_PATTERNS + cfg.get("deny_extra", [])]
+        # 与文件系统语义对齐：大小写不敏感匹配（否则 .ENV 能绕过 .env 的拉黑）
+        self.deny = [re.compile(p, re.IGNORECASE) for p in DENY_PATTERNS + cfg.get("deny_extra", [])]
         self.max_file_kb = int(cfg.get("max_file_kb", 512))
         self.max_output_chars = int(cfg.get("max_output_chars", 60000))
         self.port = int(os.environ.get("WINDOW_PORT") or cfg.get("port", 8990))
@@ -218,11 +224,16 @@ class Window:
             return None, "路径越界（窗口外一律拒）"
         return target, ""
 
+    def policy(self) -> tuple[bool, list[str]]:
+        """本窗口的提权策略（实时读注册表；读不到退回启动时的快照 —— 两处都是 fail-closed）。"""
+        return CONF.auto_grant_policy(_live_cfg() or self.cfg)
+
     def scope_summary(self) -> dict:
         wcfg = self.cfg.get("write", {}) or {}
         master = bool(wcfg.get("enabled", False))
         sw = read_switches().get(self.id, {}) or {}
         until = sw.get("until")
+        _auto, _ceiling = self.policy()
         live = master and bool(sw.get("enabled")) and not (until and time.time() > float(until))
         return {
             "window": self.id,
@@ -236,10 +247,14 @@ class Window:
             "include_effective": list(self.cfg.get("include", ["**/*"])) + SCOPE.grant_include(self.id),
             "scope_elevation": {
                 **SCOPE.summary(self.id),
+                "auto_grant": _auto,
+                "auto_grant_ceiling": ((_ceiling or "不限（任何范围申请都会自动生效）") if _auto else None),
                 "how_to_ask": (
                     "需要看更多时，让 agent 调 request_access(reason, include) 提出申请——"
                     "它只能申请，批准权在主人手里。主人在部署机器上批准：`lighthouse.sh approve <窗口>`；"
-                    "或先开一个预授权窗口：`lighthouse.sh elevate <窗口> 30 [--scope \"src/**\"]`。"
+                    "或先开一个预授权窗口：`lighthouse.sh elevate <窗口> 30 [--scope \"src/**\"]`；"
+                    "或为该窗口声明常驻策略：`lighthouse.sh auto-grant <窗口> on [--ceiling \"src/**\"]`"
+                    "（开启后上限内的申请立即生效，不用再跑命令）。"
                     "注意：exclude 与密钥默认拉黑永远不受提权影响。"
                 ),
             },
@@ -313,6 +328,19 @@ server = MCPServer(
 
 
 # ---------------------------------------------------------------- 基础
+def _live_cfg() -> dict:
+    """实时读注册表里本窗口的配置。
+
+    主人改了 auto_grant / 上限要「立刻生效」，所以不缓存、不依赖服务启动时的快照——
+    收紧策略（关掉自动授予）必须马上拦住后续申请。读不到一律当没开（fail-closed）。
+    """
+    try:
+        reg = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))["windows"]
+        return reg.get(WIN.id, {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _audit(tool: str, args: dict, ok: bool, extra: dict | None = None) -> None:
     try:
         line = {
@@ -489,7 +517,8 @@ def _validate_patterns(include: list[str]) -> tuple[list[str], str]:
 
 @server.tool(description="【申请】申请扩大本窗口的给看范围（例如从「只能看文档」提到「也能看代码」）。"
                          "默认只会记成【待批准申请】——agent 无法自我提权，批准权在主人手里；"
-                         "若主人已开预授权窗口，则在授权上限内自动生效。密钥默认拉黑与 exclude 永远不受影响。")
+                         "若主人为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效。"
+                         "密钥默认拉黑与 exclude 永远不受影响。")
 def request_access(include: list[str], reason: str = "") -> str:
     clean, bad = _validate_patterns(include)
     if bad:
@@ -510,6 +539,28 @@ def request_access(include: list[str], reason: str = "") -> str:
             "message": "已在预授权窗口内批准。现在可以读这些范围了；到期自动收回。",
         })
 
+    # 主人为这扇窗声明了「申请即授予」→ 上限内直接生效，不必再跑本地命令。
+    # fail-closed：策略读不到 / 配置可疑 / 超出上限 → 一律落回待批，等主人亲自点头。
+    auto, ceiling = CONF.auto_grant_policy(_live_cfg())
+    if auto:
+        ok_c, why_c = SCOPE.ceiling_allows(ceiling, clean)
+        if ok_c:
+            g = SCOPE.set_grant(WIN.id, clean, None,
+                                note=f"按窗口授权策略自动授予（上限 {ceiling or '不限'}）：{reason}"[:200],
+                                by="auto-grant")
+            _audit("request_access", {"include": clean, "reason": reason}, True,
+                   {"granted": g["include"], "via": "auto-grant", "ceiling": ceiling or "不限"})
+            return _dump({
+                "status": "granted",
+                "via": "window-policy",
+                "window": WIN.id,
+                "now_visible": clean,
+                "ceiling": ceiling or "不限",
+                "message": "已按本窗口的授权策略直接生效。密钥默认拉黑与 exclude 照旧生效。",
+                "note": "主人已为该窗口开启自动授予；若这不是主人本意，主人可在部署机上改策略或 deny 立即收回。",
+            })
+        why = why_c
+
     pending = SCOPE.set_pending(WIN.id, clean, reason)
     _audit("request_access", {"include": clean, "reason": reason}, True, {"pending": True, "note": why})
     return _dump({
@@ -520,7 +571,8 @@ def request_access(include: list[str], reason: str = "") -> str:
         "message": ("申请已记录，等主人批准。请把下面这句话原样转达给用户：\n"
                     f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
                     + (f"\n（预授权检查：{why}）" if arm is not None else "")),
-        "note": "agent 无法自我提权：没有主人的批准，这个申请不会改变任何可见范围。",
+        "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要主人亲自批准，不会自动生效。"
+                 if auto else "agent 无法自我提权：没有主人的批准，这个申请不会改变任何可见范围。"),
     })
 
 

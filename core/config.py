@@ -12,8 +12,13 @@ _local_cfg = ROOT_DIR / "config.local.json"
 _local_reg = ROOT_DIR / "windows.local.json"
 CONFIG_PATH = Path(os.environ.get("LIGHTHOUSE_CONFIG",
                                   str(_local_cfg if _local_cfg.exists() else ROOT_DIR / "config.json")))
-REGISTRY_PATH = Path(os.environ.get("LIGHTHOUSE_REGISTRY",
-                                    str(_local_reg if _local_reg.exists() else ROOT_DIR / "windows.json")))
+# 注册表路径：LIGHTHOUSE_REGISTRY（CLI）> WINDOW_REGISTRY（服务定义里用的）> 本机私有 > 仓库示例。
+# 两者都认，是为了让 CLI 改的和正在跑的服务读的是**同一个文件**——否则会出现「命令说改好了、
+# 服务还照旧」的静默不一致。
+REGISTRY_PATH = Path(os.environ.get(
+    "LIGHTHOUSE_REGISTRY",
+    os.environ.get("WINDOW_REGISTRY",
+                   str(_local_reg if _local_reg.exists() else ROOT_DIR / "windows.json"))))
 
 DEFAULTS: dict = {
     "hostname": "mcp.example.com",
@@ -60,6 +65,51 @@ def window_root(cfg: dict) -> Path:
     if not p.is_absolute():
         p = REGISTRY_PATH.parent / p
     return p.resolve()
+
+
+# ---------------------------------------------------------------- 提权策略（主人声明）
+def clean_patterns(val) -> list[str]:
+    """只留安全的相对 glob（滤掉绝对路径 / `..` / 超长）。类型不对 → []（fail-closed）。"""
+    if not isinstance(val, list):
+        return []
+    out = []
+    for p in val:
+        if not isinstance(p, str):
+            continue
+        p = p.strip()
+        if not p or len(p) > 200 or p.startswith("/") or ".." in p:
+            continue
+        out.append(p)
+    return out
+
+
+def window_auto_grant(cfg: dict) -> bool:
+    """窗口是否开了「申请即授予」。缺省 **False** —— 默认一切提权都要主人批（fail-closed）。"""
+    return cfg.get("auto_grant") is True
+
+
+def window_ceiling(cfg: dict) -> list[str]:
+    """常驻自动授权上限：只有申请范围完整落在里面才会自动生效。空 = 不限（仍受拉黑/exclude 约束）。"""
+    return clean_patterns(cfg.get("elevation_ceiling"))
+
+
+def auto_grant_policy(cfg: dict) -> tuple[bool, list[str]]:
+    """(是否自动授予, 上限)。
+
+    fail-closed：`auto_grant` 不是显式 true、或上限配置有任何可疑（类型错 / 绝对路径 / `..`
+    / 写了项全被清洗掉）→ 一律退化成 (False, [])，回到「必须主人批准」。
+    """
+    if cfg.get("auto_grant") is not True:
+        return False, []
+    raw = cfg.get("elevation_ceiling")
+    if raw is None:
+        return True, []
+    if not isinstance(raw, list) or not raw:
+        return False, []
+    clean = clean_patterns(raw)
+    if len(clean) != len(raw):
+        return False, []
+    return True, clean
 
 
 def window_url(cfg: dict, win_id: str, public: bool = False) -> str:

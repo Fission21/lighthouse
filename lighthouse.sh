@@ -12,9 +12,11 @@
 #   publish              生成隧道配置 + 重启隧道 + 公网健康检查（会拦 visibility=local 的窗口）
 #   write <id> on [分钟] | off | status    写开关（默认全只读）
 #   elevate <id> [分钟] [--scope "src/**"]  预授权窗口：期间 agent 的范围申请在上限内自动批
+#   auto-grant <id> on [--ceiling "src/**,docs/**"] | off | status
+#                                           常驻提权策略：开启后上限内的申请立即生效（不用再跑命令）
 #   approve <id> [--scope ...] [--minutes N] 批准 agent 的范围申请
 #   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
-#   scope <id>                              看当前授权状态
+#   scope <id>                              看当前授权状态（含常驻策略）
 #   test [id]            一键验收（起临时实例跑四套测试，不需要公网）
 #   doctor               体检：解释器 / mcp 依赖 / cloudflared / 配置
 set -uo pipefail
@@ -98,7 +100,7 @@ PYEOF
     fi
     ;;
 
-  restart) "$0" stop; sleep 1; "$0" start ;;
+  restart) "$HERE/lighthouse.sh" stop; sleep 1; "$HERE/lighthouse.sh" start ;;
 
   status)
     "$PY" - "$HERE" <<'PYEOF'
@@ -212,8 +214,77 @@ PYEOF
     "$PY" - "$CORE" "$id" <<'PYEOF'
 import json, sys
 sys.path.insert(0, sys.argv[1])
-import scope as S
-print(json.dumps({sys.argv[2]: S.summary(sys.argv[2])}, ensure_ascii=False, indent=2))
+import scope as S, config as C
+wid = sys.argv[2]
+info = S.summary(wid)
+auto, ceil = C.auto_grant_policy(C.windows(include_disabled=True).get(wid, {}))
+info["auto_grant"] = auto
+info["auto_grant_ceiling"] = (ceil or "不限（任何范围申请都会自动生效）") if auto else None
+print(json.dumps({wid: info}, ensure_ascii=False, indent=2))
+PYEOF
+    ;;
+
+  auto-grant)
+    # 常驻提权策略：on = 上限内的 agent 申请立即生效（不用再跑本地命令）；off = 回到必须主人批准
+    shift
+    id="${1:?用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling \"src/**,docs/**\"]}"; shift || true
+    act="${1:-status}"; shift || true
+    ceiling=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --ceiling) ceiling="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    "$PY" - "$CORE" "$id" "$act" "$ceiling" <<'PYEOF'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import config as C
+wid, act, ceiling = sys.argv[2], sys.argv[3], sys.argv[4]
+path = C.REGISTRY_PATH
+reg = json.loads(path.read_text(encoding="utf-8"))
+wins = reg.get("windows", {})
+if wid not in wins:
+    print(f"没有这个窗口: {wid}（现有：{', '.join(wins)}）")
+    raise SystemExit(1)
+w = wins[wid]
+auto, ceil = C.auto_grant_policy(w)
+
+if act == "status":
+    print(f"窗口 {wid} 的提权策略：")
+    print(f"  申请即授予 : {'开' if auto else '关（申请只记 pending，等主人批准）'}")
+    if auto:
+        print(f"  常驻上限   : {ceil or '不限（任何范围申请都会自动生效；拉黑/exclude 照旧）'}")
+    print(f"  注册表     : {path}")
+    raise SystemExit(0)
+
+if act == "off":
+    w.pop("auto_grant", None)
+    w.pop("elevation_ceiling", None)
+    path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"🔒 已关闭 {wid} 的自动授予：之后 agent 的申请只会记成待批，需要你跑 approve（或开预授权窗口）。")
+    print(f"   已授予的范围不会自动收回；要一并收回：bash lighthouse.sh deny {wid}")
+    raise SystemExit(0)
+
+if act != "on":
+    print('用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling "src/**,docs/**"]')
+    raise SystemExit(1)
+
+w["auto_grant"] = True
+if ceiling:
+    pats = [x.strip() for x in ceiling.split(",") if x.strip()]
+    bad = [p for p in pats if p.startswith("/") or ".." in p or len(p) > 200]
+    if bad or not pats:
+        print(f"❌ 上限写法不合法: {bad or '空'}（只接受相对 glob，例如 src/** 、docs/**）")
+        raise SystemExit(1)
+    w["elevation_ceiling"] = pats
+else:
+    w.pop("elevation_ceiling", None)
+path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"✅ 已为 {wid} 开启「申请即授予」")
+print(f"   常驻上限：{ceiling or '不限（任何范围申请都会自动生效）'}")
+print("   之后 agent 在对话里申请 → 直接生效，不用再跑本地命令。")
+print(f"   ⚠️ 密钥默认拉黑与 exclude 仍然压过一切；想马上收紧：bash lighthouse.sh auto-grant {wid} off")
 PYEOF
     ;;
 
