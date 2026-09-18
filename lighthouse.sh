@@ -17,7 +17,7 @@
 #   approve <id> [--scope ...] [--minutes N] 批准 agent 的范围申请
 #   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
 #   scope <id>                              看当前授权状态（含常驻策略）
-#   test [id]            一键验收（起临时实例跑四套测试，不需要公网）
+#   test [id]            一键验收（起临时实例跑五套测试，不需要公网）
 #   doctor               体检：解释器 / mcp 依赖 / cloudflared / 配置
 set -uo pipefail
 
