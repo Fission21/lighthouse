@@ -81,6 +81,9 @@ async def main() -> int:
     (root / "docs" / "credentials.yaml").write_text("user: a\npass: b\n", encoding="utf-8")
     (root / "docs" / "token.md").write_text("TOKEN=doc-token\n", encoding="utf-8")
     (root / "docs" / "normal.md").write_text("# 正常文档\n", encoding="utf-8")
+    (root / "src" / "config").mkdir(parents=True)
+    (root / "src" / "config" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    (root / "src" / "config" / ".env").write_text("SECRET=src-env\n", encoding="utf-8")
     (root / "docs" / "big.txt").write_text("x" * (900 * 1024), encoding="utf-8")
     (root / "private" / "plan.md").write_text("被 exclude 的目录\n", encoding="utf-8")
     (root / ".git" / "config").write_text('[remote "origin"]\n\turl = https://u:GHTOKEN@github.com/x/y.git\n', encoding="utf-8")
@@ -174,6 +177,50 @@ async def main() -> int:
                 check("普通文档可读", bool(d.get("content")), str(d)[:60])
                 ra = await call(session, "request_access", {"include": ["**"], "reason": "整套测试"})
                 check("提权流程未被加固破坏", ra.get("status") == "granted", json.dumps(ra, ensure_ascii=False)[:60])
+
+            print("\n⑧ include 写成 `dir/**` 时，目录本身必须可列举")
+            # 回归：`src/**` 曾生成 `^src/.*$`，于是 `list_files("src")` 被判「不匹配 include」——
+            # 「列出某个子目录」是最基本的操作，实测被 ChatGPT 当场撞到。
+            port2 = free_port()
+            reg = json.loads(registry.read_text(encoding="utf-8"))
+            reg["windows"]["hard2"] = {
+                "title": "目录列举窗", "root": str(root),
+                "include": ["src/**"], "exclude": [], "deny_extra": [],
+                "port": port2, "path": "/w-hard2", "visibility": "local",
+                "write": {"enabled": False},
+            }
+            registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            env2 = {**env, "WINDOW_ID": "hard2", "WINDOW_PORT": str(port2), "WINDOW_PATH": "/w-hard2"}
+            srv2 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env2,
+                                    stdout=open(tmp / "server2.log", "wb"), stderr=subprocess.STDOUT)
+            try:
+                for _ in range(40):
+                    with socket.socket() as s_:
+                        if s_.connect_ex(("127.0.0.1", port2)) == 0:
+                            break
+                    time.sleep(0.5)
+                async with streamable_http_client(f"http://127.0.0.1:{port2}/w-hard2") as (r2, w2):
+                    async with ClientSession(r2, w2) as s2:
+                        await s2.initialize()
+                        d = await call(s2, "list_files", {"path": "src"})
+                        check("list_files('src') 不再被判越界", "files" in d, json.dumps(d, ensure_ascii=False)[:70])
+                        d = await call(s2, "list_files", {"path": "src/config"})
+                        check("list_files('src/config') 可列", "files" in d, json.dumps(d, ensure_ascii=False)[:70])
+                        d = await call(s2, "read_file", {"path": "src/config/app.py"})
+                        check("src/config/app.py 可读", bool(d.get("content")), d.get("error", "")[:40])
+                        d = await call(s2, "read_file", {"path": "src/config/.env"})
+                        check("放宽匹配后 .env 仍被拉黑", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s2, "read_file", {"path": "docs/normal.md"})
+                        check("`src/**` 之外的路径仍被拒", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s2, "list_files", {"path": "srx"})   # 前缀相似但不是它
+                        check("形近目录 'srx' 不被误放行", "files" not in d or not d.get("files"),
+                              json.dumps(d, ensure_ascii=False)[:70])
+            finally:
+                srv2.terminate()
+                try:
+                    srv2.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    srv2.kill()
 
     finally:
         srv.terminate()

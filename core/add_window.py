@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""新增一个受控窗口：给任意本地项目登记一扇窗（只写 windows.json，不动服务）。
+"""新增一个受控窗口：给任意本地项目登记一扇窗（只写注册表文件，不动服务）。
 
 **第一原则：范围由用户决定。** 所以本工具不会替你默认「全给看」——
 没给 --include / --preset 时会**问你**（交互）；非交互环境则要求你显式选择，拒绝静默默认。
@@ -24,7 +24,12 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-REGISTRY = ROOT_DIR / "windows.json"
+sys.path.insert(0, str(ROOT_DIR / "core"))
+import config as C  # noqa: E402  —— 注册表路径的唯一来源
+
+# ⚠️ 不要自己拼路径：服务端（server.py / render_services.py）读的是 config.REGISTRY_PATH，
+#    CLI 必须写到同一份文件，否则会出现「命令说登记好了、服务根本没这扇窗」。
+REGISTRY = C.REGISTRY_PATH
 HOME = str(Path.home())
 CLI = "bash lighthouse.sh"
 

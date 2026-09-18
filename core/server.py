@@ -126,13 +126,22 @@ def _redact(text: str) -> tuple[str, int]:
 
 
 def _glob_to_re(pat: str) -> re.Pattern:
-    out, i = [], 0
-    while i < len(pat):
+    out, i, n = [], 0, len(pat)
+    while i < n:
         c = pat[i]
+        # '/**' 表示「这个目录本身 + 它的整棵子树」。
+        # ⚠️ 少了这一条，`include: ["src/**"]` 会把 `list_files("src")` 判成越界——
+        #    而「列出某个子目录」是最基本的操作（实测被 ChatGPT 当场撞到，报「不匹配 include」）。
+        if c == "/" and pat[i + 1:i + 3] == "**":
+            out.append("(?:/.*)?")
+            i += 3
+            if i < n and pat[i] == "/":
+                i += 1
+            continue
         if c == "*":
-            if i + 1 < len(pat) and pat[i + 1] == "*":
+            if i + 1 < n and pat[i + 1] == "*":
                 # '**/' → 可选目录前缀（这样 '**/*' 也能匹配根级文件）；'**' 单独出现 → 任意
-                if i + 2 < len(pat) and pat[i + 2] == "/":
+                if i + 2 < n and pat[i + 2] == "/":
                     out.append("(?:.*/)?")
                     i += 3
                     continue
