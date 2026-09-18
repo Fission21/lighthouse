@@ -230,7 +230,7 @@ lighthouse/
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
 ├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 29 / hardening 23) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
-└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP
+└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
 
 ## How the four gates are wired

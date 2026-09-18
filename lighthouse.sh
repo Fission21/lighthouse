@@ -17,6 +17,8 @@
 #   approve <id> [--scope ...] [--minutes N] 批准 agent 的范围申请
 #   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
 #   scope <id>                              看当前授权状态（含常驻策略）
+#   issue "标题" [--area 模块] [--sev 高|中|低] [--detail "现象"]
+#                                           记一条问题到 docs/ISSUES.md（不改代码也能攒问题）
 #   test [id]            一键验收（起临时实例跑五套测试，不需要公网）
 #   doctor               体检：解释器 / mcp 依赖 / cloudflared / 配置
 set -uo pipefail
@@ -221,6 +223,50 @@ auto, ceil = C.auto_grant_policy(C.windows(include_disabled=True).get(wid, {}))
 info["auto_grant"] = auto
 info["auto_grant_ceiling"] = (ceil or "不限（任何范围申请都会自动生效）") if auto else None
 print(json.dumps({wid: info}, ensure_ascii=False, indent=2))
+PYEOF
+    ;;
+
+  issue)
+    # 记一条问题到 docs/ISSUES.md 的「待修」区 —— 先把问题攒住，回头统一修
+    shift
+    title="${1:?用法: lighthouse.sh issue \"一句话标题\" [--area 模块] [--sev 高|中|低] [--detail \"现象/证据\"]}"; shift || true
+    area=""; sev="中"; detail=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --area) area="$2"; shift 2 ;;
+        --sev) sev="$2"; shift 2 ;;
+        --detail) detail="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    "$PY" - "$HERE" "$title" "$area" "$sev" "$detail" <<'PYEOF'
+import re, sys
+from datetime import datetime
+from pathlib import Path
+root = Path(sys.argv[1])
+title, area, sev, detail = sys.argv[2:6]
+p = root / "docs" / "ISSUES.md"
+if not p.exists():
+    print(f"❌ 找不到 {p}")
+    raise SystemExit(1)
+s = p.read_text(encoding="utf-8")
+nums = [int(m) for m in re.findall(r"^### #(\d+)", s, re.M)]
+n = (max(nums) + 1) if nums else 1
+entry = (f"### #{n} {title}\n\n"
+         f"- **发现**：{datetime.now():%Y-%m-%d}（lighthouse.sh issue）\n"
+         f"- **现象**：{detail or '（待补）'}\n"
+         f"- **期望**：（待补）\n"
+         f"- **证据**：（待补）\n"
+         f"- **区域**：{area or '（待补）'}\n"
+         f"- **严重度**：{sev}\n"
+         f"- **状态**：待修\n\n")
+mark = "<!-- NEW-ISSUES-HERE -->\n"
+if mark not in s:
+    print("❌ docs/ISSUES.md 缺少插入标记 <!-- NEW-ISSUES-HERE -->")
+    raise SystemExit(1)
+p.write_text(s.replace(mark, mark + "\n" + entry, 1), encoding="utf-8")
+print(f"✅ 已记入 docs/ISSUES.md：#{n} {title}")
+print(f"   严重度 {sev}｜区域 {area or '待补'}｜修完记得移到「已修」并补 commit 号")
 PYEOF
     ;;
 

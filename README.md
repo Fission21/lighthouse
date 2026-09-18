@@ -213,7 +213,7 @@ lighthouse/
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
 ├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 29 / 加固 23）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
-└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP
+└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
 
 ## 四道闸是怎么落的

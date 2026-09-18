@@ -29,6 +29,9 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 
 ## 关键约定
 
+- **发现问题先记 `docs/ISSUES.md`**：`bash lighthouse.sh issue "标题" --area 模块 --sev 中 --detail "现象/证据"`。
+  一条一个问题，**证据必须能复现**（审计原文 / 命令输出 / 报错文字）；修完把它移到「已修」并补 commit 号。
+  别在聊天里口头说一句就算——**散在对话里的问题等于没记**。
 - **窗口范围只写在 `windows.json`**——不要在任何别的文件里重复定义范围。
 - **提权策略也只在 `windows.json`**：`auto_grant`（申请即授予）+ `elevation_ceiling`（最大范围上限）。
   **策略是实时读的**（每个 `request_access` 现读注册表），所以改这里立刻生效、收紧也是立刻的；
