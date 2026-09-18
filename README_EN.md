@@ -2,11 +2,12 @@
 
 # Lighthouse · 灯塔
 
-**Open a window onto your local project — for web AIs to see, and only see what you circled.**
+**Filesystem MCP gives an AI access. Lighthouse governs that access.**
+**Before you open the door for an AI, put locks, logs and an approval step on it.**
 
-Four gates · output redaction · full audit log · write switch (read-only by default) · elevation is yours to grant, per request or by a standing policy you set · scope is asked, never assumed
+Four gates · egress redaction · full audit log · write switch (read-only by default) · elevation is yours to grant, per request or by a standing policy you set · scope is asked, never assumed
 
-<small>[中文版 README](README.md)</small>
+<small>[中文版 README](README.md)</small> · <small>[How it differs from filesystem MCP](#how-it-differs-from-filesystem-mcp)</small>
 
 <small>Authors · 诗人 & CC</small>
 
@@ -14,35 +15,103 @@ Four gates · output redaction · full audit log · write switch (read-only by d
 
 ---
 
-## What it is
+## The problem
 
-Web AIs (ChatGPT connectors, any MCP client) are powerful, but they cannot see **your machine**.
-Lighthouse opens a **controlled window** onto one local directory and exposes it over MCP — while
-you declare up front what may and may not be seen, secrets are redacted on the way out, every call
-leaves a trace, and nothing is ever widened without your approval.
+You tell the ChatGPT web app (or any AI) “look at this local project”. Today's standard recipe:
+run a filesystem MCP, put it behind a Cloudflare tunnel or Tailscale, hand over the URL. It works —
+and leaves five questions unanswered:
+
+| | Question | A typical filesystem MCP |
+|---|---|---|
+| ① | What can it **read**? | Everything under the mount point — `.env`, private keys, backups you forgot about |
+| ② | What did it read, and when? | Usually nothing is recorded |
+| ③ | Can a secret it reads **end up in an answer** sent to the model vendor? | No egress check |
+| ④ | Can it **write**? | Many setups grant read-write by default |
+| ⑤ | Who approves it **wanting more**? | The concept does not exist |
+
+A filesystem MCP answers “**can it access**”. These five are “**how is that access governed**”.
+
+## Lighthouse's answer: the agent never touches files directly
+
+It goes through a channel with gates:
 
 ```
-your local project
-   └─ window MCP server (4 gates · redaction · audit · write switch)   ← starts on boot
-        └─ cloudflared tunnel (one hostname, path-routed to each window)
-             └─ https://your-domain/<random path per window>
-                  └─ web AI (ChatGPT connector / any MCP client)
+                       web AI / Agent
+                             │
+                             │ ① I want to read X (same road when it wants more)
+                             ▼
+                   ┌───────────────────┐
+                   │ Request access    │  request_access — it can only ask, never self-grant
+                   ├───────────────────┤
+                   │ Policy            │  include / exclude / deny-list / standing bound
+                   ├───────────────────┤
+                   │ Owner approval    │  per request by default; a standing policy if you set one
+                   ├───────────────────┤
+                   │ Redaction         │  egress check: sk-… / ghp_… / key blocks → «REDACTED»
+                   ├───────────────────┤
+                   │ Audit             │  one line per call, refusals included
+                   └───────────────────┘
+                             │
+                             ▼
+                          your files
 ```
 
-In one line: **you are not handing over your machine — you are opening a window you drew yourself.**
+**The real difference is the trust model.** A filesystem MCP assumes the *client is trusted* — it is
+a process you started on your own machine. Lighthouse assumes the *client is untrusted*: it is
+OpenAI's server, reaching your disk over the public internet. An untrusted client means every layer
+must be able to say “no” on its own, and every call must leave a trace.
 
-## What it blocks, at a glance
+> Stated the other way round: **if you only need a local agent on your own machine (Claude Desktop,
+> Cursor, …) to read files, a filesystem MCP plus a tunnel is enough — you do not need Lighthouse.**
+> It exists for the other situation: the machine on the far side is not yours, and you still have to
+> open your disk to it.
 
-| Concern | Lighthouse's answer |
+## See it refuse in 30 seconds
+
+The interesting demo is not “it can read a file” — it is what happens when it reaches for something
+it must not have:
+
+```
+$ tail -5 ~/.lighthouse/audit/miji.jsonl          # real output, timestamps/some fields trimmed
+{"tool":"read_file","args":{"path":"tools/kb.py"},"ok":true,"bytes":22332,"redactions":0}
+{"tool":"read_file","args":{"path":"docs/.env"},"ok":false,"reason":"deny-list: secrets/credentials/database"}
+{"tool":"read_file","args":{"path":"../../etc/hosts"},"ok":false,"reason":"path escape (outside the window)"}
+{"tool":"read_file","args":{"path":".git/logs/HEAD"},"ok":false,"reason":"deny-list"}
+{"tool":"request_access","args":{"include":["**"]},"ok":true,"pending":true,"note":"no elevation window armed"}
+```
+
+What it can read is **what you circled**; `.env` and `.git` never get in (even after asking for
+“the whole repository”); widening the scope can only produce a **pending request** waiting for you.
+That log is the whole truth — there is no second set of books.
+
+## How it differs from filesystem MCP
+
+| | filesystem MCP (+ tunnel) | Lighthouse |
+|---|---|---|
+| Problem it solves | Letting an AI **access** your files | Making that access **governed** |
+| Grant granularity | A mount point | Per-window include / exclude / bound |
+| Secrets | On you to keep them out of the directory | **Deny-list by default**: `.env*`, `*.pem`, `id_rsa*`, `*secret*`, `*token*`, all of `.git/` — refused unconditionally, no include can override it |
+| Egress content | Returned as-is | Egress redaction: `sk-… / ghp_… / AKIA… / key blocks` → `«REDACTED»`, search snippets included |
+| Writing | Often open by default | **Two locks**, read-only by default; open it by hand (optionally auto-closing in 30 min), backup before and sha256 after |
+| Elevation | No such concept — you edit config and restart | The agent can only `request_access`; by default that is a pending entry you `approve`. Also `elevate` (time-boxed) or `auto-grant` (standing policy, optionally bounded) |
+| Audit | Usually none | One line per call, refusals included: `~/.lighthouse/audit/<window>.jsonl` |
+| Trust model | Client is trusted (local process) | **Client is untrusted** (public internet, third-party server) |
+
+Both can show an AI your local files. The difference shows up when something goes wrong — and in
+which side can say exactly what happened.
+
+## What the four gates actually block
+
+| Thing you worry about | Lighthouse's answer |
 |---|---|
-| Will it browse other directories? | Gate ① realpath must stay under `root` — refused otherwise |
-| Will it read my `.env` / private keys? | Gate ④ deny-list always wins: `.env* / *.pem / id_rsa* / credentials* / *.db` … no `include` pattern can override it |
-| Will it see what I explicitly excluded? | Gate ② `exclude` globs (a directory match prunes the whole subtree) |
-| Will it leak a key into an answer? | Output redaction: `sk-… / ghp_… / AIza… / AKIA… / Bearer … / private key blocks` → `«REDACTED»`, applied to search snippets too |
+| Will it browse my other directories? | Gate ① root boundary: anything resolving outside `root` is refused (symlink escapes too) |
+| Will it see my `.env` / private keys? | Gate ④ deny-list: `.env* / *.pem / id_rsa* / credentials* / *.db`, all of `.git/` — unconditional; no include pattern can override it, and case variants (`.ENV`) are caught |
+| Will it see what I explicitly excluded? | Gate ② `exclude` globs (a directory match prunes the whole subtree; `PRIVATE/` too) |
+| Will it leak a key into an answer? | Egress redaction: `sk-… / ghp_… / AIza… / AKIA… / Bearer … / private key blocks` → `«REDACTED»`, applied to search snippets as well |
 | Will it edit my code? | **Read-only by default.** You open the write switch by hand (optionally auto-closing in N minutes); every change is backed up first and hashed after |
-| Can it widen its own access? | **Not by default.** It can only *ask*: `request_access` records a pending request, and granting is yours (`lighthouse.sh approve`), or you pre-arm a time-limited elevation window (`elevate`). You can also declare a standing policy per window (`auto-grant`, optionally bounded by `--ceiling`) — then requests inside that bound take effect immediately, while anything beyond it still waits for you. Elevation never beats `exclude` or the key deny-list |
+| Can it widen its own access? | **Not by default.** It can only *ask*: `request_access` records a pending request, and granting is yours (`lighthouse.sh approve`), or you pre-arm a time-limited window (`elevate`). You can also declare a standing policy per window (`auto-grant`, optionally bounded by `--ceiling`) — requests inside that bound take effect immediately, anything beyond it still waits for you. Elevation never beats `exclude` or the key deny-list |
 | How do I know what it read? | Audit log, one JSON line per call (refusals included): `~/.lighthouse/audit/<window>.jsonl` |
-| How do I trust any of this? | Five self-contained test suites (13 + 46 + 25 + 29 + 23 checks) — one command |
+| How do I trust any of this? | Five self-contained test suites (13 + 46 + 25 + 29 + 23 checks, one of them an attack probe) — one command |
 
 ## What you need first (read this before installing)
 
