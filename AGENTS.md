@@ -45,7 +45,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 ## 改完必须做的验证
 
 ```bash
-bash tests/run_all_tests.sh      # 四套：冒烟 13 / 只读审计 45+ / 写开关 25 / 提权 18，必须全绿
+bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 45+ / 写开关 25 / 提权 29 / 加固 23，必须全绿
 ```
 
 任何安全相关的改动（闸门、脱敏、写路径、提权）都要补一条测试——测试套件是这个项目的安全承诺书。
@@ -55,10 +55,10 @@ bash tests/run_all_tests.sh      # 四套：冒烟 13 / 只读审计 45+ / 写�
 | 文件 | 职责 |
 |---|---|
 | `core/server.py` | 窗口服务：闸门、脱敏、审计、四个读工具 + 一个提权申请工具 + 四个写工具 |
-| `core/scope.py` | 范围授权（grant 已授予 / pending 待批 / arm 预授权窗口），提权状态都在这 |
+| `core/scope.py` | 范围授权（grant 已授予 / pending 待批 / arm 预授权窗口 / ceiling 常驻上限判定），提权状态都在这 |
 | `core/config.py` | 配置与注册表读取（含 *.local.json 优先级）、路径解析 |
 | `core/add_window.py` | `lighthouse.sh new` 的实现（不给范围时会问主人） |
 | `core/render_services.py` | launchd / systemd 服务定义生成 |
 | `core/render_ingress.py` | 隧道 ingress 生成（路径分流） |
 | `core/switch.py` | 写开关 CLI |
-| `tests/*` | 四套测试 + 一键验收 |
+| `tests/*` | 五套测试（冒烟 / 只读审计 / 写开关 / 提权 / 加固）+ 一键验收 |
