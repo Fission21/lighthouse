@@ -8,6 +8,8 @@
 
 <small>[English README](README_EN.md)</small>
 
+<small>作者 · 诗人 & CC</small>
+
 </div>
 
 ---
@@ -41,6 +43,29 @@
 | 我怎么知道它看过什么？ | 审计日志：每次调用一行（含被拒的），`~/.lighthouse/audit/<窗口>.jsonl` |
 | 我怎么证明它真的挡得住？ | 自带四套测试（13 + 46 + 25 + 18 项），一条命令跑完 |
 
+## 跑起来需要什么（前置，先看这个）
+
+灯塔分两档用，按你要达到的效果取件——省得装到一半才发现少东西：
+
+| | ① 本机自己用（给本机 MCP 客户端读） | ② 出公网给网页 AI 看（含①全部） |
+|---|---|---|
+| **必需** | Python 3.10+、`mcp` 库、一条窗口声明 | **＋ `cloudflared` ＋ 一个 DNS 托管在 Cloudflare 的域名** |
+| **不需要** | 域名、cloudflared、公网 | 公网 IP、路由器端口映射、开入站端口、证书申请 |
+
+服务常驻用系统自带（macOS launchd / Linux systemd），无需另装；不想开机自启就前台手动跑。
+
+> **最容易卡住的一条：域名。** 让网页 AI 看见，就需要一个**稳定的公网地址**；灯塔用的 Cloudflare
+> 命名隧道，对外入口只能是你 Cloudflare 账户下某个域名的子域——**这一步绕不过去**。
+> 这是 Cloudflare 的规则，不是灯塔的限制。已有域名的话，只是「挂到 Cloudflare → 建隧道 → 给子域加一条 DNS 记录」的事。
+
+还没有域名？三条替代，都不用买：
+
+- **ngrok 免费版** —— 送 1 个固定 dev 域名（`xxx.ngrok-free.app`，额度 1GB/月、2 万请求/月）；把隧道指向 `127.0.0.1:<窗口端口>` 即可，不用改灯塔代码（只是不走 `publish` 流水线）；
+- **Tailscale Funnel** —— 所有套餐可用（含免费，beta），固定域名 `<设备>.<tailnet>.ts.net`，同样手工接；
+- **Cloudflare 临时隧道（trycloudflare）** —— 不用域名，但 URL 每次重启就变，而且官方明确**不支持 SSE**，MCP 的 streamable-http 会用到事件流：它只够本地冒烟，别拿它接连接器。
+
+网页 AI 那一侧还需要：ChatGPT 账号 + 打开开发者模式（设置 → 安全防护）。详见 [`docs/CHATGPT.md`](docs/CHATGPT.md)。
+
 ## 快速开始（4 步）
 
 ```bash
@@ -63,7 +88,7 @@ bash lighthouse.sh url myproj      # 拿到本机地址，先自己试
 到这一步，任何 MCP 客户端（本机的 Claude/Codex/Cursor 等）都能通过上面的地址读它了。
 
 ```bash
-# 3) 出公网（让网页版 AI 也能看见）
+# 3) 出公网（让网页版 AI 也能看见）—— 需要：一个 DNS 托管在 Cloudflare 的域名（见上「跑起来需要什么」）
 cloudflared tunnel login
 cloudflared tunnel create lighthouse          # 记下输出的 UUID
 cloudflared tunnel route dns <UUID> mcp.你的域名   # 必须写 UUID，写隧道名会认错隧道
@@ -199,6 +224,10 @@ Cloudflare 的 cloudflared 让「不出站也安全」变成了默认选项。�
 - **v1.1** —— 对话内提权（`request_access` 申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围（不给范围时会问主人，脚本环境拒绝静默默认）+ 第 4 套测试（提权 18 项）+ 本机私有配置 `*.local.json` 约定。测试总数 102 项。
 - **v1.0** —— 首个开源版本：四道闸、脱敏、审计、写开关（两级锁）、三套自带测试、多窗口路径分流、launchd/systemd 服务生成。
 
+## 作者
+
+由 **诗人**（GitHub [@Fission21](https://github.com/Fission21)）与 **CC** 设计并实现。
+
 ## License
 
-MIT © Lighthouse contributors
+MIT © 诗人 & CC（Poet & CC）

@@ -8,6 +8,8 @@ Four gates · output redaction · full audit log · write switch (read-only by d
 
 <small>[中文版 README](README.md)</small>
 
+<small>Authors · 诗人 & CC</small>
+
 </div>
 
 ---
@@ -42,6 +44,31 @@ In one line: **you are not handing over your machine — you are opening a windo
 | How do I know what it read? | Audit log, one JSON line per call (refusals included): `~/.lighthouse/audit/<window>.jsonl` |
 | How do I trust any of this? | Four self-contained test suites (13 + 46 + 25 + 18 checks) — one command |
 
+## What you need first (read this before installing)
+
+Lighthouse comes in two tiers — take only what your goal needs, so nothing turns up missing halfway:
+
+| | ① Local use (your own MCP clients) | ② Public, for web AIs (includes ①) |
+|---|---|---|
+| **Required** | Python 3.10+, the `mcp` library, one window entry | **＋ `cloudflared` ＋ a domain whose DNS is hosted on Cloudflare** |
+| **Not required** | domain, cloudflared, public network | public IP, port forwarding, inbound ports, certificates |
+
+Keeping services alive uses what the OS already has (macOS launchd / Linux systemd) — nothing to install;
+run them in the foreground if you prefer no auto-start.
+
+> **The one that trips people up: the domain.** Giving web AIs access needs a *stable public address*.
+> Lighthouse uses a Cloudflare **named tunnel**, whose public entry can only be a subdomain of a zone in
+> your Cloudflare account — **there is no way around this step.** It is Cloudflare's rule, not Lighthouse's.
+> If you already own a domain, it is just: move its DNS to Cloudflare → create the tunnel → add one DNS record.
+
+No domain yet? Three alternatives, none requiring a purchase:
+
+- **ngrok free** — includes one static dev domain (`xxx.ngrok-free.app`; 1 GB / 20k requests per month). Point the tunnel at `127.0.0.1:<window port>`; no Lighthouse code changes (it just bypasses the `publish` pipeline);
+- **Tailscale Funnel** — available on all plans (free included, beta), stable `<device>.<tailnet>.ts.net` hostname, wired up by hand the same way;
+- **Cloudflare Quick Tunnel (trycloudflare)** — no domain needed, but the URL changes on every restart and it officially **does not support SSE**, which MCP streamable-http relies on: fine for a local smoke test, not for a connector.
+
+On the web-AI side you also need: a ChatGPT account with Developer mode enabled (Settings → Security). See [`docs/CHATGPT.md`](docs/CHATGPT.md) (in Chinese).
+
 ## Quick start (4 steps)
 
 ```bash
@@ -64,7 +91,7 @@ bash lighthouse.sh url myproj      # local address — try it yourself first
 At this point any local MCP client (Claude / Codex / Cursor …) can read it through that address.
 
 ```bash
-# 3) Expose it to the web (so web-based AIs can see it too)
+# 3) Expose it to the web (so web-based AIs can see it too) — requires: a domain with DNS on Cloudflare (see "What you need first")
 cloudflared tunnel login
 cloudflared tunnel create lighthouse          # note the UUID it prints
 cloudflared tunnel route dns <UUID> mcp.example.com   # UUID, not the tunnel name
@@ -213,6 +240,10 @@ Without those two, Lighthouse would be nothing but a pile of local scripts.
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,
   multi-window path routing, launchd/systemd service generation.
 
+## Authors
+
+Designed and built by **诗人 (Poet)** ([@Fission21](https://github.com/Fission21)) and **CC**.
+
 ## License
 
-MIT © Lighthouse contributors
+MIT © Poet & CC (诗人 & CC)

@@ -5,9 +5,11 @@
 
 ## 前置
 
-1. 你已经有公网地址：`bash lighthouse.sh publish` 跑完，`bash lighthouse.sh url <id>` 能打印出
+1. 一个 **DNS 托管在 Cloudflare 的域名**——命名隧道的硬性要求（没有域名的替代方案见 README
+   「跑起来需要什么（前置，先看这个）」）。
+2. 你已经有公网地址：`bash lighthouse.sh publish` 跑完，`bash lighthouse.sh url <id>` 能打印出
    `https://你的域名/<窗口路径>`，并且 `publish` 的健康检查显示 `http=200`。
-2. 窗口是 `visibility: public`（不然 `publish` 会拦住你——那是防手滑，不是 bug）。
+3. 窗口是 `visibility: public`（不然 `publish` 会拦住你——那是防手滑，不是 bug）。
 
 ## 步骤
 
