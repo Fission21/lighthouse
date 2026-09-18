@@ -206,7 +206,7 @@ class Window:
         return True, ""
 
     def effective_include(self) -> list[re.Pattern]:
-        """注册表 include + 主人已授予的额外范围（grant）。exclude 与默认拉黑不受影响。"""
+        """注册表 include + 用户已授予的额外范围（grant）。exclude 与默认拉黑不受影响。"""
         pats = list(self.include)
         for extra in SCOPE.grant_include(self.id):
             try:
@@ -251,7 +251,7 @@ class Window:
                 "auto_grant_ceiling": ((_ceiling or "不限（任何范围申请都会自动生效）") if _auto else None),
                 "how_to_ask": (
                     "需要看更多时，让 agent 调 request_access(reason, include) 提出申请——"
-                    "它只能申请，批准权在主人手里。主人在部署机器上批准：`lighthouse.sh approve <窗口>`；"
+                    "它只能申请，批准权在用户手里。用户在部署机器上批准：`lighthouse.sh approve <窗口>`；"
                     "或先开一个预授权窗口：`lighthouse.sh elevate <窗口> 30 [--scope \"src/**\"]`；"
                     "或为该窗口声明常驻策略：`lighthouse.sh auto-grant <窗口> on [--ceiling \"src/**\"]`"
                     "（开启后上限内的申请立即生效，不用再跑命令）。"
@@ -320,8 +320,8 @@ server = MCPServer(
         f"受控窗口「{WIN.title}」：访问一个被明确划定范围的本机目录。"
         f"根目录 {WIN.root}；范围外、密钥类文件一律拒绝；输出中的凭据会自动打码。"
         "默认只读（window_info / list_files / read_file / search）；"
-        "write_file / edit_file / make_dir / delete_file 四个写工具只有在主人打开写开关后才会生效，"
-        "关闭时一律拒绝——需要改动请先请主人打开开关。"
+        "write_file / edit_file / make_dir / delete_file 四个写工具只有在用户打开写开关后才会生效，"
+        "关闭时一律拒绝——需要改动请先让用户打开开关。"
         "先调 window_info 了解范围与写开关状态。"
     ),
 )
@@ -331,7 +331,7 @@ server = MCPServer(
 def _live_cfg() -> dict:
     """实时读注册表里本窗口的配置。
 
-    主人改了 auto_grant / 上限要「立刻生效」，所以不缓存、不依赖服务启动时的快照——
+    用户改了 auto_grant / 上限要「立刻生效」，所以不缓存、不依赖服务启动时的快照——
     收紧策略（关掉自动授予）必须马上拦住后续申请。读不到一律当没开（fail-closed）。
     """
     try:
@@ -516,8 +516,8 @@ def _validate_patterns(include: list[str]) -> tuple[list[str], str]:
 
 
 @server.tool(description="【申请】申请扩大本窗口的给看范围（例如从「只能看文档」提到「也能看代码」）。"
-                         "默认只会记成【待批准申请】——agent 无法自我提权，批准权在主人手里；"
-                         "若主人为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效。"
+                         "默认只会记成【待批准申请】——agent 无法自我提权，批准权在用户手里；"
+                         "若用户为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效。"
                          "密钥默认拉黑与 exclude 永远不受影响。")
 def request_access(include: list[str], reason: str = "") -> str:
     clean, bad = _validate_patterns(include)
@@ -539,8 +539,8 @@ def request_access(include: list[str], reason: str = "") -> str:
             "message": "已在预授权窗口内批准。现在可以读这些范围了；到期自动收回。",
         })
 
-    # 主人为这扇窗声明了「申请即授予」→ 上限内直接生效，不必再跑本地命令。
-    # fail-closed：策略读不到 / 配置可疑 / 超出上限 → 一律落回待批，等主人亲自点头。
+    # 用户为这扇窗声明了「申请即授予」→ 上限内直接生效，不必再跑本地命令。
+    # fail-closed：策略读不到 / 配置可疑 / 超出上限 → 一律落回待批，等用户亲自点头。
     auto, ceiling = CONF.auto_grant_policy(_live_cfg())
     if auto:
         ok_c, why_c = SCOPE.ceiling_allows(ceiling, clean)
@@ -557,7 +557,7 @@ def request_access(include: list[str], reason: str = "") -> str:
                 "now_visible": clean,
                 "ceiling": ceiling or "不限",
                 "message": "已按本窗口的授权策略直接生效。密钥默认拉黑与 exclude 照旧生效。",
-                "note": "主人已为该窗口开启自动授予；若这不是主人本意，主人可在部署机上改策略或 deny 立即收回。",
+                "note": "用户已为该窗口开启自动授予；若这不是用户本意，用户可在部署机上改策略或 deny 立即收回。",
             })
         why = why_c
 
@@ -568,11 +568,11 @@ def request_access(include: list[str], reason: str = "") -> str:
         "window": WIN.id,
         "requested": clean,
         "reason": reason,
-        "message": ("申请已记录，等主人批准。请把下面这句话原样转达给用户：\n"
+        "message": ("申请已记录，等用户批准。请把下面这句话原样转达给用户：\n"
                     f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
                     + (f"\n（预授权检查：{why}）" if arm is not None else "")),
-        "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要主人亲自批准，不会自动生效。"
-                 if auto else "agent 无法自我提权：没有主人的批准，这个申请不会改变任何可见范围。"),
+        "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要用户亲自批准，不会自动生效。"
+                 if auto else "agent 无法自我提权：没有用户的批准，这个申请不会改变任何可见范围。"),
     })
 
 
@@ -603,7 +603,7 @@ def _write_gate(tool: str, path: str) -> tuple[Path | None, str]:
     return target, ""
 
 
-@server.tool(description="【写】写入文件（mode=overwrite 覆盖 / append 追加）。仅在主人打开该窗口写开关后可用；写前自动备份原文件，写后记录前后哈希。")
+@server.tool(description="【写】写入文件（mode=overwrite 覆盖 / append 追加）。仅在用户打开该窗口写开关后可用；写前自动备份原文件，写后记录前后哈希。")
 def write_file(path: str, content: str, mode: str = "overwrite") -> str:
     if mode not in ("overwrite", "append"):
         return _dump({"error": f"mode 只能是 overwrite / append（收到 {mode!r}）", "window": WIN.id})

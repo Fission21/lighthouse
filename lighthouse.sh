@@ -225,7 +225,7 @@ PYEOF
     ;;
 
   auto-grant)
-    # 常驻提权策略：on = 上限内的 agent 申请立即生效（不用再跑本地命令）；off = 回到必须主人批准
+    # 常驻提权策略：on = 上限内的 agent 申请立即生效（不用再跑本地命令）；off = 回到必须用户批准
     shift
     id="${1:?用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling \"src/**,docs/**\"]}"; shift || true
     act="${1:-status}"; shift || true
@@ -252,7 +252,7 @@ auto, ceil = C.auto_grant_policy(w)
 
 if act == "status":
     print(f"窗口 {wid} 的提权策略：")
-    print(f"  申请即授予 : {'开' if auto else '关（申请只记 pending，等主人批准）'}")
+    print(f"  申请即授予 : {'开' if auto else '关（申请只记 pending，等用户批准）'}")
     if auto:
         print(f"  常驻上限   : {ceil or '不限（任何范围申请都会自动生效；拉黑/exclude 照旧）'}")
     print(f"  注册表     : {path}")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""提权测试（第 4 套）：验证「agent 只能申请，主人批准才生效」。
+"""提权测试（第 4 套）：验证「agent 只能申请，用户批准才生效」。
 
 自带一套隔离环境（临时项目 + 临时注册表 + 临时状态目录 + 自己起一个服务），
 不碰你的 windows.json，也不碰 ~/.lighthouse。
@@ -7,9 +7,9 @@
 覆盖：
   ① 未授权时，范围外的文件确实读不到
   ② agent 调 request_access → 只得到 pending；**范围不会变**（agent 无法自我提权）
-  ③ 主人用 CLI 批准（lighthouse.sh approve）→ 立刻可读
+  ③ 用户用 CLI 批准（lighthouse.sh approve）→ 立刻可读
   ④ 提权**不能突破**默认拉黑（.env 依旧读不到）与 exclude
-  ⑤ 主人收回（deny）→ 回到原始范围
+  ⑤ 用户收回（deny）→ 回到原始范围
   ⑥ 预授权窗口（elevate）：上限内的申请自动批准；超出上限的申请仍转 pending
   ⑦ 过期即失效
   ⑧ 常驻策略（auto-grant）：开启后上限内申请立即生效；超出上限仍 pending；
@@ -61,7 +61,7 @@ async def call(session, name: str, args: dict) -> dict:
 
 
 def cli(*args: str, env: dict) -> str:
-    """跑 lighthouse.sh 的真 CLI（验证主人侧命令真的能用）。"""
+    """跑 lighthouse.sh 的真 CLI（验证用户侧命令真的能用）。"""
     r = subprocess.run(["bash", str(REPO / "lighthouse.sh"), *args],
                        capture_output=True, text=True, env=env, cwd=str(REPO))
     return (r.stdout + r.stderr).strip()
@@ -121,13 +121,13 @@ async def main() -> int:
                 req = await call(session, "request_access",
                                  {"include": ["code/**"], "reason": "用户想看代码"})
                 check("request_access 返回 pending", req.get("status") == "pending", json.dumps(req, ensure_ascii=False)[:80])
-                check("pending 信息里带了主人的批准命令", "approve" in json.dumps(req, ensure_ascii=False))
+                check("pending 信息里带了用户的批准命令", "approve" in json.dumps(req, ensure_ascii=False))
                 c2 = await call(session, "read_file", {"path": "code/app.py"})
                 check("申请后代码依然不可读（无法自我提权）", "不在给看范围" in json.dumps(c2, ensure_ascii=False))
                 info = await call(session, "window_info", {})
                 check("window_info 里能看到待批申请", bool(info.get("scope_elevation", {}).get("pending")))
 
-                print("\n③ 主人用 CLI 批准 → 立刻可读")
+                print("\n③ 用户用 CLI 批准 → 立刻可读")
                 out = cli("approve", "elev", "--minutes", "30", env=env)
                 check("CLI approve 成功", "已批准" in out, out.splitlines()[0][:70] if out else "")
                 c3 = await call(session, "read_file", {"path": "code/app.py"})
@@ -144,7 +144,7 @@ async def main() -> int:
                       or "给看范围" in json.dumps(esc2, ensure_ascii=False)
                       or "拉黑" in json.dumps(esc2, ensure_ascii=False), esc2.get("error", "")[:50])
 
-                print("\n⑤ 主人收回 → 回到原始范围")
+                print("\n⑤ 用户收回 → 回到原始范围")
                 out = cli("deny", "elev", env=env)
                 check("CLI deny 成功", "已收回" in out, out[:60])
                 c4 = await call(session, "read_file", {"path": "code/app.py"})

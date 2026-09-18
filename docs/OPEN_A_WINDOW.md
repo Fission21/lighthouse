@@ -9,7 +9,7 @@
 cd ~/demo/lighthouse
 export LIGHTHOUSE_PY=~/.hermes/hermes-agent/venv/bin/python    # 本机用这个解释器（带 mcp）
 
-# ① 开窗登记（不给范围它会当场问你——范围是主人的决定，工具不替你默认）
+# ① 开窗登记（不给范围它会当场问你——范围是你的决定，工具不替你默认）
 bash lighthouse.sh new myproj ~/路径/项目 --title "我的项目" --preset docs+code --public
 
 # ② 起服务（launchd / systemd user）
@@ -99,7 +99,7 @@ bash lighthouse.sh url myproj --public     # 打印 https://<域名>/<窗口路�
 
 ```text
 改 ~/demo/lighthouse 之前先读 AGENTS.md 的五条铁律（fail-closed、默认拉黑不可关、
-写权限两级锁、提权默认需主人批准、开窗必须先问范围），改完必须：
+写权限两级锁、提权默认需你批准、开窗必须先问范围），改完必须：
 bash tests/run_all_tests.sh     # 五套（13/46/25/29/23）必须全绿
 任何安全相关改动都要补一条测试。改完汇报：改了什么、测试结果、有没有破坏既有行为。
 ```

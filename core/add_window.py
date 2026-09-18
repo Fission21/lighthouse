@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """新增一个受控窗口：给任意本地项目登记一扇窗（只写 windows.json，不动服务）。
 
-**第一原则：范围由主人决定。** 所以本工具不会替你默认「全给看」——
+**第一原则：范围由用户决定。** 所以本工具不会替你默认「全给看」——
 没给 --include / --preset 时会**问你**（交互）；非交互环境则要求你显式选择，拒绝静默默认。
 
 用法:
@@ -48,7 +48,7 @@ def _port_free(port: int) -> bool:
 
 
 def ask_scope() -> list[str]:
-    """交互问范围——把选择权交给主人。"""
+    """交互问范围——把选择权交给用户。"""
     print("\n这扇窗要给外面的 AI 看多大范围？（这一步由你决定，别默认全放开）\n")
     print("  1) 只给文档          README* / docs/** / *.md")
     print("  2) 文档 + 源码       ↑ + src/** tests/** 及常见源码后缀")
@@ -102,7 +102,7 @@ def main() -> int:
         print(f"❌ 目录不存在: {root}")
         return 1
 
-    # ---- 范围：显式 > 预设 > 问主人 ----
+    # ---- 范围：显式 > 预设 > 问用户 ----
     if a.include:
         include = [x.strip() for x in a.include.split(",") if x.strip()]
         src = "--include"
@@ -122,7 +122,7 @@ def main() -> int:
         return 1
     slug = "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 
-    # ---- 给主人看清楚：这扇窗能看到什么 ----
+    # ---- 给用户看清楚：这扇窗能看到什么 ----
     print("\n──── 这扇窗的范围（请确认）────")
     print(f"  项目根目录 : {root}")
     print(f"  能看的     : {include or '（什么都不给看，之后可按需申请提权）'}")

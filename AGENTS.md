@@ -16,16 +16,16 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 3. **写权限两级锁**：`windows.json` 的 `write.enabled`（总闸）+ 运行时开关
    `~/.lighthouse/state/window-write.json`（`switch.py` 管理）。两个都开才能写；
    写前必须备份、写后必须记 sha256。
-4. **提权默认必须主人批准**：agent 侧只有 `request_access`（申请）；默认只记成待批申请，
-   授予只能由主人侧产生（`lighthouse.sh approve` / `elevate`）。
-   **唯一例外**：窗口在 `windows.json` 里由主人**显式**写了 `auto_grant: true`（可用
-   `elevation_ceiling` 限定最大范围）时，上限内的申请立即生效——那是主人事先声明的授权，
-   改动它只能由主人侧产生（`lighthouse.sh auto-grant`）。自动授予的判定必须 fail-closed：
+4. **提权默认必须用户批准**：agent 侧只有 `request_access`（申请）；默认只记成待批申请，
+   授予只能由用户侧产生（`lighthouse.sh approve` / `elevate`）。
+   **唯一例外**：窗口在 `windows.json` 里由用户**显式**写了 `auto_grant: true`（可用
+   `elevation_ceiling` 限定最大范围）时，上限内的申请立即生效——那是用户事先声明的授权，
+   改动它只能由用户侧产生（`lighthouse.sh auto-grant`）。自动授予的判定必须 fail-closed：
    策略读不到 / 配置可疑（类型错、绝对路径、`..`、写了项全被清洗）/ 超出上限 → 一律落回待批。
    `core/scope.py` 的 grant 只做「加宽 include」，**绝不能**让它绕过 exclude 或 `DENY_PATTERNS`。
    不要新增任何「agent 可以自己改 auto_grant / ceiling / 自己授权范围」的工具。
 5. **开窗必须先问范围**：`add_window.py` 在没给 `--include/--preset` 时必须交互询问，
-   非交互环境要报错退出——**不许静默默认 `**/*`**。范围是主人的决定，不是工具的默认值。
+   非交互环境要报错退出——**不许静默默认 `**/*`**。范围是用户的决定，不是工具的默认值。
 
 ## 关键约定
 
@@ -57,7 +57,7 @@ bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 45+ / 写�
 | `core/server.py` | 窗口服务：闸门、脱敏、审计、四个读工具 + 一个提权申请工具 + 四个写工具 |
 | `core/scope.py` | 范围授权（grant 已授予 / pending 待批 / arm 预授权窗口 / ceiling 常驻上限判定），提权状态都在这 |
 | `core/config.py` | 配置与注册表读取（含 *.local.json 优先级）、路径解析 |
-| `core/add_window.py` | `lighthouse.sh new` 的实现（不给范围时会问主人） |
+| `core/add_window.py` | `lighthouse.sh new` 的实现（不给范围时会问用户） |
 | `core/render_services.py` | launchd / systemd 服务定义生成 |
 | `core/render_ingress.py` | 隧道 ingress 生成（路径分流） |
 | `core/switch.py` | 写开关 CLI |

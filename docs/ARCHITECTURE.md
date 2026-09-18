@@ -42,7 +42,7 @@
 ```
 AI 调 write_file
    → 闸门四连（越界/exclude/include/拉黑）→ 拒 或 继续
-   → 写开关两级检查 → 关着就拒（明确告诉它"去让主人开开关"）
+   → 写开关两级检查 → 关着就拒（明确告诉它"去让你开开关"）
    → 旧内容备份 + 记 sha_before
    → 落盘
    → 记 sha_after + 审计行（ok=true, bytes, backup 路径）

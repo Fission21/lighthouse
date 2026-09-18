@@ -67,7 +67,7 @@ def window_root(cfg: dict) -> Path:
     return p.resolve()
 
 
-# ---------------------------------------------------------------- 提权策略（主人声明）
+# ---------------------------------------------------------------- 提权策略（用户声明）
 def clean_patterns(val) -> list[str]:
     """只留安全的相对 glob（滤掉绝对路径 / `..` / 超长）。类型不对 → []（fail-closed）。"""
     if not isinstance(val, list):
@@ -84,7 +84,7 @@ def clean_patterns(val) -> list[str]:
 
 
 def window_auto_grant(cfg: dict) -> bool:
-    """窗口是否开了「申请即授予」。缺省 **False** —— 默认一切提权都要主人批（fail-closed）。"""
+    """窗口是否开了「申请即授予」。缺省 **False** —— 默认一切提权都要用户批（fail-closed）。"""
     return cfg.get("auto_grant") is True
 
 
@@ -97,7 +97,7 @@ def auto_grant_policy(cfg: dict) -> tuple[bool, list[str]]:
     """(是否自动授予, 上限)。
 
     fail-closed：`auto_grant` 不是显式 true、或上限配置有任何可疑（类型错 / 绝对路径 / `..`
-    / 写了项全被清洗掉）→ 一律退化成 (False, [])，回到「必须主人批准」。
+    / 写了项全被清洗掉）→ 一律退化成 (False, [])，回到「必须用户批准」。
     """
     if cfg.get("auto_grant") is not True:
         return False, []

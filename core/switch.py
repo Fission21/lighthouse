@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""写开关 CLI —— 把「能不能改」的权利交给主人。
+"""写开关 CLI —— 把「能不能改」的权利交给用户。
 
 开关文件：<状态目录>/state/window-write.json（默认 ~/.lighthouse；server 每次调用现读，改完立即生效，不用重启）
 

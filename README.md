@@ -138,7 +138,7 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 
 要点：
 
-- **默认 agent 无法自我提权**：没有主人的批准，`request_access` 只能留下一条申请，`window_info` 里能查到；
+- **默认 agent 无法自我提权**：没有你的批准，`request_access` 只能留下一条申请，`window_info` 里能查到；
 - **常驻策略是「你事先授权」**：`bash lighthouse.sh auto-grant <窗口> on --ceiling "src/**,docs/**"`
   之后，落在上限内的申请直接生效、不用再跑命令；超出上限的照样转成待批。
   不设 `--ceiling` 就是「任何范围申请都自动生效」（密钥拉黑与 exclude 仍然拦得住）。
@@ -150,7 +150,7 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 - **三种给法**：常驻策略（`auto-grant`）、事后批准（`approve`）、事前预授权窗口（`elevate <id> 30 --scope "src/**"`，到期自动失效）；
 - **随时收回**：`deny <id>` 一把清空（额外范围 + 待批申请 + 预授权窗口）；`auto-grant <id> off` 关掉常驻策略。
 
-这就是「把选择的权利交给主人」的落地方式：**方便归方便，闸门永远在你手里。**
+这就是「把选择的权利交给你」的落地方式：**方便归方便，闸门永远在你手里。**
 
 ## 目录结构
 
@@ -234,7 +234,7 @@ Cloudflare 的 cloudflared 让「不出站也安全」变成了默认选项。�
   开启后**上限内的申请立即生效，不用再跑本地命令**；超出上限仍转待批；策略实时读注册表，`off` 一敲立刻收紧（不用重启服务）；
   配置可疑一律 fail-closed。修两处：CLI 与服务的注册表路径统一（`LIGHTHOUSE_REGISTRY` > `WINDOW_REGISTRY`，此前 CLI 可能改到另一份文件），
   `restart` 不再因 `$0` 是相对路径而「command not found」。第 4 套测试扩到 28 项，测试总数 112 项。
-- **v1.1** —— 对话内提权（`request_access` 申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围（不给范围时会问主人，脚本环境拒绝静默默认）+ 第 4 套测试（提权 18 项）+ 本机私有配置 `*.local.json` 约定。测试总数 102 项。
+- **v1.1** —— 对话内提权（`request_access` 申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围（不给范围时会问你，脚本环境拒绝静默默认）+ 第 4 套测试（提权 18 项）+ 本机私有配置 `*.local.json` 约定。测试总数 102 项。
 - **v1.0** —— 首个开源版本：四道闸、脱敏、审计、写开关（两级锁）、三套自带测试、多窗口路径分流、launchd/systemd 服务生成。
 
 ## 作者
