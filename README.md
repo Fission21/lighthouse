@@ -226,7 +226,7 @@ lighthouse/
   "include": ["README.md", "docs/**", "src/**"],   // ③ include 闸：只放行这些 glob
   "exclude": ["private/**"],                       // ② exclude 闸：命中连子树一起排除（大小写变体也拦）
   "path": "/w-myproj-6m1yo0",                      // 路径带随机段（不可枚举，但不是认证 —— 见 docs/SECURITY.md）
-  "visibility": "local",                           // local = 私密，发布时会被拦下
+  "visibility": "local",                           // local = 私密；不会写进公网入口（publish 会跳过它）
   "write": { "enabled": true }                     // 写权限总闸（默认关；还要运行时开关才真正可写）
 }
 ```

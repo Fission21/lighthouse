@@ -28,7 +28,11 @@ PY="${LIGHTHOUSE_PY:-python3}"
 export LIGHTHOUSE_PY="$PY"
 export LIGHTHOUSE_CLI="bash $HERE/lighthouse.sh"
 CORE="$HERE/core"
-REGISTRY="$HERE/windows.json"
+# 注册表路径必须是**服务端读的同一个文件**（config.py 是唯一来源）。
+# 这里曾硬编码 windows.json（仓库示例），于是 publish 的可见性检查读一份、
+# 真正的发布读另一份 —— 已标 public 的窗口在检查阶段完全看不见。
+REGISTRY="$("$PY" -c "import sys; sys.path.insert(0, '$CORE'); import config as C; print(C.REGISTRY_PATH)" 2>/dev/null)"
+[ -n "$REGISTRY" ] || REGISTRY="$HERE/windows.json"
 
 ids() { "$PY" "$CORE/render_services.py" list 2>/dev/null; }
 plat() { uname -s; }
@@ -62,17 +66,26 @@ PYEOF
 
   start)
     "$PY" "$CORE/render_services.py" >/dev/null || exit 1
-    # 端口占用告警：撞端口会导致服务一直重启失败
+    # 端口占用告警：只在「该窗口的服务没在跑、端口却被占着」时才是真冲突。
+    # （窗口自己在运行时当然占着自己的端口，那不是冲突 —— 以前会对每个已运行窗口都误报。）
     "$PY" - "$REGISTRY" <<'PYEOF'
-import json, socket, sys
+import json, os, platform, socket, subprocess, sys
+
+def service_running(wid: str) -> bool:
+    if platform.system() == "Darwin":
+        return subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/com.lighthouse.window-{wid}"],
+                              capture_output=True).returncode == 0
+    return subprocess.run(["systemctl", "--user", "is-active", "--quiet", f"lighthouse-window-{wid}"],
+                          capture_output=True).returncode == 0
+
 for wid, w in json.load(open(sys.argv[1]))["windows"].items():
-    if not w.get("enabled", True):
+    if not w.get("enabled", True) or service_running(wid):
         continue
     port = w.get("port")
     with socket.socket() as s:
         s.settimeout(0.3)
         if s.connect_ex(("127.0.0.1", port)) == 0:
-            print(f"  ⚠️ 端口 {port} 已被占用（窗口 {wid}）——请改 windows.json 里的 port，或先停掉占用的程序")
+            print(f"  ⚠️ 端口 {port} 被别的程序占着（窗口 {wid} 尚未运行）——请改 windows.json 里的 port")
 PYEOF
     if [ "$(plat)" = "Darwin" ]; then
       for id in $(ids); do
@@ -223,6 +236,18 @@ auto, ceil = C.auto_grant_policy(C.windows(include_disabled=True).get(wid, {}))
 info["auto_grant"] = auto
 info["auto_grant_ceiling"] = (ceil or "不限（任何范围申请都会自动生效）") if auto else None
 print(json.dumps({wid: info}, ensure_ascii=False, indent=2))
+
+r = info.get("recent_calls") or {}
+mins = r.get("window_minutes", 10)
+if r.get("total"):
+    last = r.get("last") or {}
+    path = (last.get("args") or {}).get("path", "")
+    verdict = "放行" if last.get("ok") else f"拒绝（{last.get('reason', '')}）"
+    print(f"\n最近 {mins} 分钟：收到 {r['total']} 次调用（{r['allowed']} 放行 / {r['denied']} 拒绝）")
+    print(f"  最近一次：{last.get('ts', '')[11:19]}  {last.get('tool', '')} {path}  → {verdict}")
+else:
+    print(f"\n最近 {mins} 分钟：没有收到任何调用")
+    print("  （如果你刚让 AI 试过，说明请求根本没到本机 —— 多半是平台/网络拦的，与灯塔无关）")
 PYEOF
     ;;
 
@@ -336,17 +361,24 @@ PYEOF
 
   publish)
     echo "== 对外发布前检查（visibility）=="
-    blocked=$("$PY" - "$REGISTRY" <<'PYEOF'
+    # 只拦「本次没有可发布内容」这一种情况；无关的 local 窗口只是提示「会跳过它」，
+    # 不该让整条命令停摆（以前只要注册表里存在任何一个 local 窗口就必须 --force）。
+    "$PY" - "$REGISTRY" <<'PYEOF'
 import json, sys
 wins = json.load(open(sys.argv[1]))["windows"]
-for k, v in wins.items():
-    if v.get("enabled", True) and v.get("visibility", "local") != "public":
-        print(f"  ⚠️ {k}: visibility=local（未标 public）")
+enabled = {k: v for k, v in wins.items() if v.get("enabled", True)}
+pub = [k for k, v in enabled.items() if v.get("visibility", "local") == "public"]
+loc = [k for k, v in enabled.items() if v.get("visibility", "local") != "public"]
+for k in loc:
+    print(f"  ⏭  {k}: visibility=local —— 本次不发布它（保持私密，这是它该有的样子）")
+if not pub:
+    print("  ❌ 没有任何标了 public 的窗口 —— 没有可发布的内容")
+    raise SystemExit(3)
+print(f"  ✅ 将发布 {len(pub)} 个窗口：{', '.join(pub)}")
 PYEOF
-)
-    echo "${blocked:-  ✅ 所有启用窗口都标了 public}"
-    if [ -n "$blocked" ] && [ "${2:-}" != "--force" ]; then
-      echo "已中止：确认要对外，就把 windows.json 里对应窗口的 visibility 改成 public；或加 --force。"
+    rc=$?
+    if [ "$rc" = "3" ] && [ "${2:-}" != "--force" ]; then
+      echo "已中止：确认要对外，就把 windows.json 里对应窗口的 visibility 改成 public（或加 --force 跳过检查）。"
       exit 1
     fi
     echo "== 生成隧道配置 =="

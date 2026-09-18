@@ -30,17 +30,22 @@ def build(cfg: dict, wins: dict) -> str:
         "# 手工改动会被下一次 render 覆盖；要改范围请改 windows.json，要改域名请改 config.json。",
         "ingress:",
     ]
-    for wid, w in wins.items():
-        vis = w.get("visibility", "local")
-        note = "  # ⚠️ visibility=local（私密窗口，对外暴露前请三思）" if vis == "local" else ""
+    # ⚠️ 只把 visibility=public 的窗口写进隧道 —— `local` 的意思就是「不要对外」。
+    #    以前这里只加一句注释照样往里写，结果标了 local 的窗口仍能从公网访问（实测 http=200）。
+    #    安全承诺必须落在行为上：这里的过滤就是那句承诺的执行点。
+    public = {k: v for k, v in wins.items() if v.get("visibility", "local") == "public"}
+    skipped = [k for k in wins if k not in public]
+    if skipped:
+        lines.append(f"  # 以下窗口 visibility=local，已从公网入口剔除：{', '.join(skipped)}")
+    for wid, w in public.items():
         lines += [
             f"  - hostname: {cfg['hostname']}",
             f"    path: {w['path']}*",
-            f"    service: http://127.0.0.1:{w['port']}{note}",
+            f"    service: http://127.0.0.1:{w['port']}",
             f"    # ↑ 窗口: {wid}（{w.get('title', wid)}）",
         ]
     if cfg.get("spare_hostname"):
-        first = next(iter(wins.items()), None)
+        first = next(iter(public.items()), None)          # 备用入口同样只能指向 public 窗口
         if first:
             lines += [f"  - hostname: {cfg['spare_hostname']}   # 备用入口 → {first[0]} 窗口",
                       f"    service: http://127.0.0.1:{first[1]['port']}"]
@@ -52,6 +57,9 @@ def main() -> int:
     apply_ = "--apply" in sys.argv
     cfg = C.load()
     wins = C.windows()
+    skipped = [k for k, v in wins.items() if v.get("visibility", "local") != "public"]
+    if skipped:
+        print(f"⏭  跳过（visibility=local，不写进公网入口）：{', '.join(skipped)}")
     if not wins:
         print("（没有启用的窗口：先在 windows.json 里登记一条，或跑 `bash lighthouse.sh new <id> <路径>`）")
         return 1

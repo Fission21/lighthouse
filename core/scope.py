@@ -204,6 +204,43 @@ def ceiling_allows(ceiling: list[str], include: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
+def recent_activity(wid: str, minutes: int = 10, max_lines: int = 300) -> dict:
+    """最近 N 分钟的调用统计。
+
+    存在的理由：用户最常需要的判断是「AI 说读不到 —— 是它没来问，还是被我拒了？」。
+    - **没有记录** = 请求根本没到本机（平台/网络拦的，与灯塔无关）
+    - **有记录但 ok=false** = 到了本机，是这扇窗按规则拒的
+    """
+    path = STATE_ROOT / "audit" / f"{wid}.jsonl"
+    out = {"window_minutes": minutes, "total": 0, "allowed": 0, "denied": 0,
+           "last": None, "audit_file": str(path)}
+    if not path.exists():
+        return out
+    cutoff = datetime.now(CST) - timedelta(minutes=minutes)
+    rows = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            d = json.loads(line)
+            ts = datetime.fromisoformat(d["ts"])
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=CST)
+        if ts >= cutoff:
+            rows.append(d)
+    ok = sum(1 for r in rows if r.get("ok"))
+    last = rows[-1] if rows else None
+    out.update(total=len(rows), allowed=ok, denied=len(rows) - ok)
+    if last:
+        out["last"] = {"ts": last.get("ts"), "tool": last.get("tool"), "args": last.get("args"),
+                       "ok": last.get("ok"), "reason": last.get("reason")}
+    return out
+
+
 def summary(wid: str) -> dict:
     """给人看的当前授权状态。"""
     data = load().get(wid, {})
@@ -216,6 +253,7 @@ def summary(wid: str) -> dict:
         "pending": data.get("pending"),
         "elevation_window": ({"until": _describe_until(arm.get("until")), "max_scope": arm.get("allowed") or "不限"
                               } if arm else None),
+        "recent_calls": recent_activity(wid),
     }
 
 

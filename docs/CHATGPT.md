@@ -9,7 +9,7 @@
    「跑起来需要什么（前置，先看这个）」）。
 2. 你已经有公网地址：`bash lighthouse.sh publish` 跑完，`bash lighthouse.sh url <id>` 能打印出
    `https://你的域名/<窗口路径>`，并且 `publish` 的健康检查显示 `http=200`。
-3. 窗口是 `visibility: public`（不然 `publish` 会拦住你——那是防手滑，不是 bug）。
+3. 窗口是 `visibility: public`（只有 public 窗口会写进公网入口；local 窗口 `publish` 会跳过它，不出公网）。
 
 ## 步骤
 

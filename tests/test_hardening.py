@@ -19,6 +19,7 @@
   ⑦ 正常文件不被误伤（加固不能把窗口变成什么都看不见）
   ⑧ include 写成 `dir/**` 时，目录本身必须可列举
   ⑨ 「按类型给看」的 include（`**/*.py`）不能让目录树在列举时消失
+  ⑩ 公网入口只含 public 窗口（visibility=local 的必须被剔除）
 
 用法: python3 test_hardening.py [--keep]
 """
@@ -268,6 +269,23 @@ async def main() -> int:
                     srv3.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     srv3.kill()
+
+            print("\n⑩ 公网入口只含 public 窗口（visibility=local 不得写进隧道）")
+            # 回归：这里曾经只给 local 窗口加一句注释就照样写进 ingress，
+            # 结果标了「私密」的窗口仍能从公网访问（实测 http=200）。
+            if str(REPO / "core") not in sys.path:
+                sys.path.insert(0, str(REPO / "core"))
+            import render_ingress as ri
+            text = ri.build(
+                {"hostname": "h.test", "tunnel_id": "t-1",
+                 "cloudflared_config": str(Path(tmp) / "cf-test.yml")},
+                {"pub": {"port": 9001, "path": "/w-pub", "title": "公开的", "visibility": "public"},
+                 "priv": {"port": 9002, "path": "/w-priv", "title": "私密的", "visibility": "local"},
+                 "dflt": {"port": 9003, "path": "/w-def", "title": "没写 visibility"}},
+            )
+            check("public 窗口写进 ingress", "/w-pub" in text)
+            check("visibility=local 的窗口不写进 ingress", "/w-priv" not in text, text[:80])
+            check("没写 visibility 时按 local 处理（默认不对外）", "/w-def" not in text)
 
     finally:
         srv.terminate()

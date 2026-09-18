@@ -243,7 +243,7 @@ lighthouse/
   "include": ["README.md", "docs/**", "src/**"],   // ③ include: only these globs are served
   "exclude": ["private/**"],                       // ② exclude: pruned, subtree included (case variants too)
   "path": "/w-myproj-6m1yo0",                      // random path segment (unguessable — but NOT authentication; see docs/SECURITY.md)
-  "visibility": "local",                           // local = private; publish refuses to expose it
+  "visibility": "local",                           // local = private; never written into the public ingress
   "write": { "enabled": true }                     // write master switch (off by default; the runtime switch must be on too)
 }
 ```
