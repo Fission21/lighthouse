@@ -178,7 +178,8 @@ lighthouse/
 └── docs/
     ├── ARCHITECTURE.md      # 一扇窗是怎么被四道闸过滤的
     ├── SECURITY.md          # 威胁模型与边界（该防的防，防不了的说清楚）
-    └── CHATGPT.md           # 接网页版 ChatGPT 的完整步骤（含踩坑）
+    ├── CHATGPT.md           # 接网页版 ChatGPT 的完整步骤（含踩坑）
+    └── OPEN_A_WINDOW.md     # 开窗四步 + 交代给别的 AI 的话术模板（中文）
 ```
 
 ## 它是怎么做到既方便又安全的

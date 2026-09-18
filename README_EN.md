@@ -189,7 +189,8 @@ lighthouse/
 └── docs/
     ├── ARCHITECTURE.md      # how a single call is filtered (in Chinese)
     ├── SECURITY.md          # threat model & boundaries (in Chinese)
-    └── CHATGPT.md           # step-by-step ChatGPT connector setup (in Chinese)
+    ├── CHATGPT.md           # step-by-step ChatGPT connector setup (in Chinese)
+    └── OPEN_A_WINDOW.md     # four steps to open a window + prompts to hand the job to another AI (in Chinese)
 ```
 
 ## How it manages to be both convenient and safe

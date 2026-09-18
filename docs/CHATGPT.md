@@ -50,7 +50,7 @@
 | 本机访问 200，公网 404 | MCP 的 DNS 重绑定保护（服务端已内置关闭）；或隧道 ingress 缺这条 path |
 | 回答卡在第一个字 | 生成其实已完成，刷新页面 |
 | 想让它改文件 | `bash lighthouse.sh write <id> on 30`（30 分钟自动关）；不用了 `… off` |
-| 想让它看更多 | 对话里说「提高访问权限」「代码也给它看」→ 它会调 `request_access` 申请 → 你在机器上 `bash lighthouse.sh approve <id>`；想省事就先 `bash lighthouse.sh elevate <id> 30 --scope "src/**"` |
+| 想让它看更多 | 对话里说「提高访问权限」「代码也给它看」→ 它会调 `request_access` 申请 → 你在机器上 `bash lighthouse.sh approve <id>`。想省去每次批：`bash lighthouse.sh elevate <id> 30 --scope "src/**"`（限时预授权）或 `bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"]`（常驻策略：上限内的申请直接生效）。注意 ChatGPT 那个「允许使用 X？」弹窗属于平台侧、**不一定会出现**，它不等于灯塔的授权 |
 | 想收回权限 | `bash lighthouse.sh deny <id>`（额外范围 / 待批申请 / 预授权窗口一把清空） |
 | 想撤掉 | 插件页 → 对应应用 → 删除；同时 `bash lighthouse.sh stop` 关掉本地服务 |
 
