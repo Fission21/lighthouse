@@ -214,6 +214,34 @@ class Window:
             return False, "不在给看范围（不匹配 include）"
         return True, ""
 
+    def pruned(self, rel: str) -> bool:
+        """这个目录是否被**明确排除**（exclude / 默认拉黑）。
+
+        ⚠️ 只看「不该看」，**不看 include**。原因：按类型给的 include（`**/*.py`、`*.md`）
+        永远不匹配目录名，若用它剪枝，整棵目录树会在列举时消失 ——
+        agent 连「有哪些文件可读」都发现不了。文件能不能读，由 yield 前的 `check()` 决定。
+        """
+        rel = (rel or "").lstrip("/")
+        if not rel:
+            return False
+        for pat in self.deny:
+            if pat.search(rel):
+                return True
+        parts = rel.split("/")
+        for i in range(1, len(parts) + 1):
+            if any(p.match("/".join(parts[:i])) for p in self.exclude):
+                return True
+        return False
+
+    def has_visible_under(self, rel: str) -> bool:
+        """`rel` 这棵子树里有没有**任何**能给看的文件（只看有没有，不返回内容）。"""
+        target, _ = self.resolve(rel)
+        if target is None or not target.is_dir():
+            return False
+        for _ in _iter_files(target, 8):
+            return True
+        return False
+
     def effective_include(self) -> list[re.Pattern]:
         """注册表 include + 用户已授予的额外范围（grant）。exclude 与默认拉黑不受影响。"""
         pats = list(self.include)
@@ -389,8 +417,9 @@ def _iter_files(base: Path, depth: int):
             if name.startswith(".") or name in {"node_modules", "__pycache__", ".venv", "venv", ".git"}:
                 continue
             sub = f"{rel_dir}/{name}" if rel_dir else name
-            ok, _ = WIN.check(sub + "/")
-            if ok:
+            # 只剪「明确不该看」的目录（exclude / 默认拉黑）；**不要用 include 剪枝** ——
+            # 否则 `include: ["**/*.py"]` 这类按类型的配置会让整棵目录树在列举时消失。
+            if not WIN.pruned(sub):
                 keep.append(name)
         dirnames[:] = keep
         for f in sorted(filenames):
@@ -418,8 +447,12 @@ def window_info() -> str:
 def list_files(path: str = "", depth: int = 3) -> str:
     ok, why = WIN.check(path)
     if not ok:
-        _audit("list_files", {"path": path}, False, {"reason": why})
-        return _dump({"error": why, "window": WIN.id})
+        # 目录本身不匹配 include ≠ 不能列：只要它**下面**有能给看的文件就算数。
+        # 否则 `include: ["**/*.py"]` 这类「按类型给看」的配置下，agent 永远发现不了文件。
+        # （只判「有没有」，不返回内容；真正列出来的每一项仍会逐个过闸。）
+        if not WIN.has_visible_under(path):
+            _audit("list_files", {"path": path}, False, {"reason": why})
+            return _dump({"error": why, "window": WIN.id})
     target, err = WIN.resolve(path)
     if err or target is None:
         _audit("list_files", {"path": path}, False, {"reason": err})

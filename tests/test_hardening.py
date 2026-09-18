@@ -17,6 +17,8 @@
   ⑤ 体积上限：超过 max_file_kb 的文件被拒
   ⑥ 枚举面：list_files 不列出被拉黑项，search 不把拉黑文件的内容带出来
   ⑦ 正常文件不被误伤（加固不能把窗口变成什么都看不见）
+  ⑧ include 写成 `dir/**` 时，目录本身必须可列举
+  ⑨ 「按类型给看」的 include（`**/*.py`）不能让目录树在列举时消失
 
 用法: python3 test_hardening.py [--keep]
 """
@@ -81,6 +83,8 @@ async def main() -> int:
     (root / "docs" / "credentials.yaml").write_text("user: a\npass: b\n", encoding="utf-8")
     (root / "docs" / "token.md").write_text("TOKEN=doc-token\n", encoding="utf-8")
     (root / "docs" / "normal.md").write_text("# 正常文档\n", encoding="utf-8")
+    (root / "src" / "util").mkdir(parents=True)
+    (root / "src" / "util" / "helper.py").write_text("def h():\n    pass\n", encoding="utf-8")
     (root / "src" / "config").mkdir(parents=True)
     (root / "src" / "config" / "app.py").write_text("print('hi')\n", encoding="utf-8")
     (root / "src" / "config" / ".env").write_text("SECRET=src-env\n", encoding="utf-8")
@@ -221,6 +225,49 @@ async def main() -> int:
                     srv2.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     srv2.kill()
+
+            print("\n⑨ 「按类型给看」的 include（**/*.py）不能让目录树在列举时消失")
+            # 回归：列举时曾用 include 给目录剪枝，而 `**/*.py` 永远不匹配目录名，
+            # 于是 list_files('') 返回 0 项、list_files('src') 直接拒绝 —— agent 完全发现不了文件。
+            port3 = free_port()
+            reg = json.loads(registry.read_text(encoding="utf-8"))
+            reg["windows"]["hard3"] = {
+                "title": "按类型给看窗", "root": str(root),
+                "include": ["**/*.py"], "exclude": [], "deny_extra": [],
+                "port": port3, "path": "/w-hard3", "visibility": "local",
+                "write": {"enabled": False},
+            }
+            registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            env3 = {**env, "WINDOW_ID": "hard3", "WINDOW_PORT": str(port3), "WINDOW_PATH": "/w-hard3"}
+            srv3 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env3,
+                                    stdout=open(tmp / "server3.log", "wb"), stderr=subprocess.STDOUT)
+            try:
+                for _ in range(40):
+                    with socket.socket() as s_:
+                        if s_.connect_ex(("127.0.0.1", port3)) == 0:
+                            break
+                    time.sleep(0.5)
+                async with streamable_http_client(f"http://127.0.0.1:{port3}/w-hard3") as (r3, w3):
+                    async with ClientSession(r3, w3) as s3:
+                        await s3.initialize()
+                        d = await call(s3, "list_files", {"path": "", "depth": 3})
+                        check("列根目录能发现 .py 文件（不是空列表）",
+                              bool(d.get("files")), f"count={d.get('count')}")
+                        d = await call(s3, "list_files", {"path": "src"})
+                        check("列 src 目录放行（目录名不匹配 include 也不该拒）",
+                              bool(d.get("files")), json.dumps(d, ensure_ascii=False)[:70])
+                        d = await call(s3, "read_file", {"path": "src/util/helper.py"})
+                        check("深层 .py 可读", bool(d.get("content")), d.get("error", "")[:40])
+                        d = await call(s3, "read_file", {"path": "README.md"})
+                        check("非 .py 仍被拒", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s3, "list_files", {"path": "docs"})
+                        check("没有 .py 的目录列举仍被拒", "files" not in d, json.dumps(d, ensure_ascii=False)[:60])
+            finally:
+                srv3.terminate()
+                try:
+                    srv3.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    srv3.kill()
 
     finally:
         srv.terminate()
