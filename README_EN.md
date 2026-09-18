@@ -100,19 +100,6 @@ That log is the whole truth — there is no second set of books.
 Both can show an AI your local files. The difference shows up when something goes wrong — and in
 which side can say exactly what happened.
 
-## What the four gates actually block
-
-| Thing you worry about | Lighthouse's answer |
-|---|---|
-| Will it browse my other directories? | Gate ① root boundary: anything resolving outside `root` is refused (symlink escapes too) |
-| Will it see my `.env` / private keys? | Gate ④ deny-list: `.env* / *.pem / id_rsa* / credentials* / *.db`, all of `.git/` — unconditional; no include pattern can override it, and case variants (`.ENV`) are caught |
-| Will it see what I explicitly excluded? | Gate ② `exclude` globs (a directory match prunes the whole subtree; `PRIVATE/` too) |
-| Will it leak a key into an answer? | Egress redaction: `sk-… / ghp_… / AIza… / AKIA… / Bearer … / private key blocks` → `«REDACTED»`, applied to search snippets as well |
-| Will it edit my code? | **Read-only by default.** You open the write switch by hand (optionally auto-closing in N minutes); every change is backed up first and hashed after |
-| Can it widen its own access? | **Not by default.** It can only *ask*: `request_access` records a pending request, and granting is yours (`lighthouse.sh approve`), or you pre-arm a time-limited window (`elevate`). You can also declare a standing policy per window (`auto-grant`, optionally bounded by `--ceiling`) — requests inside that bound take effect immediately, anything beyond it still waits for you. Elevation never beats `exclude` or the key deny-list |
-| How do I know what it read? | Audit log, one JSON line per call (refusals included): `~/.lighthouse/audit/<window>.jsonl` |
-| How do I trust any of this? | Five self-contained test suites (13 + 46 + 25 + 29 + 23 checks, one of them an attack probe) — one command |
-
 ## What you need first (read this before installing)
 
 Lighthouse comes in two tiers — take only what your goal needs, so nothing turns up missing halfway:
@@ -236,60 +223,38 @@ That is how “the choice stays with the owner” is implemented: **as open or a
 
 ```
 lighthouse/
-├── lighthouse.sh            # single entry point (new/start/stop/status/url/publish/write/elevate/auto-grant/approve/deny/scope/test/doctor)
-├── config.json              # global config: hostname / tunnel / state dir  (config.local.json overrides, gitignored)
-├── windows.json             # window registry: the visible scope of every window lives here
-├── core/
-│   ├── server.py            # the window MCP server (gates + redaction + audit + write tools + request_access)
-│   ├── config.py            # config & registry loading, path resolution
-│   ├── scope.py             # scope authorization (grant / pending / arm / ceiling bound check)
-│   ├── add_window.py        # `lighthouse.sh new` (asks the owner when no scope is given)
-│   ├── render_services.py   # launchd / systemd service generation
-│   ├── render_ingress.py    # tunnel ingress generation (one hostname, path routing)
-│   └── switch.py            # write switch CLI
-├── tests/
-│   ├── smoke_window.py      # generic smoke, 13 checks (works on any window)
-│   ├── audit_readonly.py    # read-only audit, 46 checks (incl. before/after file fingerprints)
-│   ├── test_write.py        # write switch, 25 checks (off=refuse all / on=full flow / off again)
-│   ├── test_elevate.py      # elevation, 29 checks (ask≠grant / approve / revoke / pre-arm / standing policy / expiry)
-│   ├── test_hardening.py    # gate hardening, 23 checks (case-insensitive bypass, .git, escapes, enumeration)
-│   └── run_all_tests.sh     # all five suites against a throw-away instance
-├── demo/project/            # sample project (with a pass phrase, proving reads are real)
-└── docs/
-    ├── ARCHITECTURE.md      # how a single call is filtered (in Chinese)
-    ├── SECURITY.md          # threat model & boundaries (in Chinese)
-    ├── CHATGPT.md           # step-by-step ChatGPT connector setup (in Chinese)
-    ├── OPEN_A_WINDOW.md     # four steps to open a window + prompts to hand the job to another AI (in Chinese)
-    └── ROADMAP.md           # direction & gaps (auth/identity → resource adapters), marked as not implemented (in Chinese)
+├── lighthouse.sh        # single entry point (new/start/stop/status/url/publish/write/elevate/auto-grant/approve/deny/scope/test/doctor)
+├── config.json          # global config: hostname / tunnel / state dir  (*.local.json overrides, gitignored)
+├── windows.json         # window registry: the visible scope of every window lives here
+├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
+│                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
+├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 29 / hardening 23) + run_all_tests.sh
+├── demo/project/        # sample project (with a pass phrase, proving reads are real)
+└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP
 ```
 
-## How it manages to be both convenient and safe
+## How the four gates are wired
 
 **Scope lives in one place.** One entry in `windows.json` = one window:
 
 ```json
 "myproj": {
-  "title": "My project",
-  "root": "~/code/myproj",                 // only this tree
-  "include": ["README.md", "docs/**", "src/**"],   // only these files
-  "exclude": ["private/**"],               // pruned, subtree included
-  "port": 8940,
-  "path": "/w-myproj-6m1yo0",              // random path segment as a weak secret
-  "visibility": "local",                   // local = private; publish refuses to expose it
-  "write": { "enabled": true }             // writing *may* be enabled (still off by default)
+  "root": "~/code/myproj",                         // ① root boundary: only this tree; anything resolving outside is refused (symlink escapes too)
+  "include": ["README.md", "docs/**", "src/**"],   // ③ include: only these globs are served
+  "exclude": ["private/**"],                       // ② exclude: pruned, subtree included (case variants too)
+  "path": "/w-myproj-6m1yo0",                      // random path segment (unguessable — but NOT authentication; see docs/SECURITY.md)
+  "visibility": "local",                           // local = private; publish refuses to expose it
+  "write": { "enabled": true }                     // write master switch (off by default; the runtime switch must be on too)
 }
 ```
 
-Changing the scope means editing one file — no code changes.
+④ **The deny-list always comes first**: `.env*`, `*.pem`, `id_rsa*`, `*secret*`, `*token*`, `*.db`, all of
+`.git/` — refused unconditionally, no include pattern can override it, case variants (`.ENV`) included.
+Egress goes through **redaction** as well (`sk-… / ghp_… / key blocks` → `«REDACTED»`, search snippets included).
 
-**Fail-closed.** Path resolution errors, unmatched patterns, anything ambiguous — refused, and logged.
-
-**One hostname, many windows.** Path routing forwards to each window's port: adding a window never
-touches DNS, and a single `publish` rebuilds the routing table.
-
-**Write switch, two locks.** `write.enabled` in the registry (master) plus a runtime switch
-(`~/.lighthouse/state/window-write.json`). Both must be open. Every write is backed up first and
-recorded with before/after sha256 hashes.
+Changing the scope means editing this one file — no code changes. **Fail-closed**: path resolution errors,
+unmatched patterns, anything ambiguous — refused and logged. **One hostname, many windows**: path routing
+forwards to each window's port, so adding a window never touches DNS and a single `publish` rebuilds the table.
 
 ## Dependencies & thanks
 
@@ -300,9 +265,9 @@ recorded with before/after sha256 hashes.
 | cloudflared | publish a local port safely (outbound-only tunnel, no open ports) | https://github.com/cloudflare/cloudflared |
 | macOS launchd / Linux systemd | keep window services alive | built-in |
 
-**With thanks to**: the Model Context Protocol team, for turning “how AIs reach the outside world”
-into an open protocol; and Cloudflare, for making outbound-only tunnels the default safe option.
-Without those two, Lighthouse would be nothing but a pile of local scripts.
+**With thanks to**: the MCP team for turning “how AIs reach the outside world” into an open protocol, and
+Cloudflare for making outbound-only tunnels the default safe option — without those two, Lighthouse would be
+nothing but a pile of local scripts.
 
 ## Gotchas (all hit in practice)
 
@@ -317,17 +282,13 @@ Without those two, Lighthouse would be nothing but a pile of local scripts.
 
 ## Changelog
 
-- **v1.2** — standing elevation policy `auto-grant` (`bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"] | off | status`):
-  requests inside the bound take effect immediately (no local command to run), anything beyond it still turns into a
-  pending request; the policy is read live so `off` tightens at once without a restart; suspicious config degrades
-  fail-closed. Gate hardening after an attack probe found real bypasses: all deny/glob matching is now case-insensitive
-  (on macOS/Windows `.ENV` / `Id_Rsa` used to read the very files `.env` / `id_rsa` are denied, and `PRIVATE/x` slipped
-  past `exclude private/**`), the whole `.git/` directory is denied (it used to deny only `.git/config`), and the key
-  name list covers `apikey.txt` / `my-secrets.txt` / `config.env` / `token.md` variants. 5th test suite (hardening, 23 checks).
-  Fixes: CLI and server now resolve the same registry file, and `restart` no longer fails when `$0` is a relative path.
-- **v1.1** — in-chat elevation (`request_access` request-only + `approve` / `elevate` / `deny` / `scope`) ·
-  scope is asked at window-creation time (never silently defaults to `**/*`) · 4th test suite (elevation, 18 checks) ·
-  private local config convention (`*.local.json`). 102 checks total.
+- **v1.2** — standing elevation policy `auto-grant` (requests inside the bound take effect immediately, anything
+  beyond it stays pending; the policy is read live, so `off` tightens at once); gate hardening after an attack probe
+  found real bypasses (case-insensitive deny matching, the whole `.git/` directory, more key-name variants);
+  5th test suite (hardening) — 136 checks total. Also: CLI and server now resolve the same registry file, and
+  `restart` no longer fails when `$0` is a relative path.
+- **v1.1** — in-chat elevation (request-only + `approve` / `elevate` / `deny` / `scope`) · scope is asked at
+  window-creation time (never silently defaults to `**/*`) · 4th test suite (102 checks total).
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,
   multi-window path routing, launchd/systemd service generation.
 

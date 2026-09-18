@@ -94,19 +94,6 @@ $ tail -5 ~/.lighthouse/audit/miji.jsonl          # 真实输出，时间戳与�
 
 两条都能让你「把本地文件给 AI 看」。区别是出事的时候，哪一边说得清发生了什么。
 
-## 四道闸具体拦什么
-
-| 你会担心的事 | 灯塔的回答 |
-|---|---|
-| 它会不会翻我别的目录？ | ① 根界闸：realpath 出 `root` 一律拒（符号链接穿透也拦） |
-| 它会不会看到我的 `.env` / 私钥？ | ④ 默认拉黑：`.env* / *.pem / id_rsa* / credentials* / *.db`、整个 `.git/` 等无条件拒绝，include 写多宽都没用；大小写变体（`.ENV`）同样拦 |
-| 它会看到我明确划出去的东西吗？ | ② exclude 闸：目录命中连子树一起排除（`PRIVATE/` 也拦） |
-| 它会不会把我密钥抄进回答里？ | 出口脱敏：`sk-… / ghp_… / AIza… / AKIA… / Bearer … / 私钥块` → `«REDACTED»`，连检索片段也过一遍 |
-| 它会不会改我的代码？ | **默认全只读。** 想让它动手，得你亲手开写开关（还能设 30 分钟自动关）；开着时每次改动先备份、后记 sha256 |
-| 它会不会自己把范围扩大？ | **默认不会。** 它只能「申请」：`request_access` 默认只记成待批申请，批准权在你手里（`lighthouse.sh approve`），或你先开限时预授权窗口（`elevate`）。也可以给某扇窗声明常驻策略 `auto-grant`（可带 `--ceiling` 上限），之后上限内的申请直接生效——超出上限的照样要你点头。提权永远压不过 exclude 与密钥拉黑 |
-| 我怎么知道它看过什么？ | 审计日志：每次调用一行（含被拒的），`~/.lighthouse/audit/<窗口>.jsonl` |
-| 我怎么证明它真的挡得住？ | 自带五套测试（13 + 46 + 25 + 29 + 23 项，含一整套攻击性探测），一条命令跑完 |
-
 ## 跑起来需要什么（前置，先看这个）
 
 灯塔分两档用，按你要达到的效果取件——省得装到一半才发现少东西：
@@ -122,11 +109,10 @@ $ tail -5 ~/.lighthouse/audit/miji.jsonl          # 真实输出，时间戳与�
 > 命名隧道，对外入口只能是你 Cloudflare 账户下某个域名的子域——**这一步绕不过去**。
 > 这是 Cloudflare 的规则，不是灯塔的限制。已有域名的话，只是「挂到 Cloudflare → 建隧道 → 给子域加一条 DNS 记录」的事。
 
-还没有域名？三条替代，都不用买：
-
-- **ngrok 免费版** —— 送 1 个固定 dev 域名（`xxx.ngrok-free.app`，额度 1GB/月、2 万请求/月）；把隧道指向 `127.0.0.1:<窗口端口>` 即可，不用改灯塔代码（只是不走 `publish` 流水线）；
-- **Tailscale Funnel** —— 所有套餐可用（含免费，beta），固定域名 `<设备>.<tailnet>.ts.net`，同样手工接；
-- **Cloudflare 临时隧道（trycloudflare）** —— 不用域名，但 URL 每次重启就变，而且官方明确**不支持 SSE**，MCP 的 streamable-http 会用到事件流：它只够本地冒烟，别拿它接连接器。
+还没有域名？三条免费替代（把隧道指向 `127.0.0.1:<窗口端口>` 即可，不用改灯塔代码，只是不走 `publish` 流水线）：
+**ngrok 免费版**（1 个固定 dev 域名，1GB/月）、**Tailscale Funnel**（所有套餐可用，固定 `<设备>.<tailnet>.ts.net`）、
+**trycloudflare 临时隧道**（不用域名，但 URL 每次重启就变，且官方**不支持 SSE**——MCP 的 streamable-http 要用事件流，
+只够本地冒烟，别拿它接连接器）。
 
 网页 AI 那一侧还需要：ChatGPT 账号 + 打开开发者模式（设置 → 安全防护）。详见 [`docs/CHATGPT.md`](docs/CHATGPT.md)。
 
@@ -176,15 +162,17 @@ bash lighthouse.sh url <id>              # 查地址（本机 / 公网）
 bash lighthouse.sh write <id> on 30      # 开 30 分钟写权限（到点自动关）
 bash lighthouse.sh write <id> off        # 立刻回到只读
 bash lighthouse.sh write status          # 现在谁能写
-bash lighthouse.sh scope <id>            # 当前授权状态（额外范围 / 待批申请 / 预授权窗口）
+bash lighthouse.sh scope <id>            # 当前授权状态（额外范围 / 待批申请 / 常驻策略）
 bash lighthouse.sh approve <id>          # 批准它的提权申请
-bash lighthouse.sh elevate <id> 30 --scope "src/**"   # 预授权：30 分钟内这类申请自动批
+bash lighthouse.sh elevate <id> 30 --scope "src/**"   # 限时预授权：30 分钟内这类申请自动批
+bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"]   # 常驻策略：上限内申请立即生效
+bash lighthouse.sh auto-grant <id> off   # 回到逐次批准（下次申请立即生效，不用重启）
 bash lighthouse.sh deny <id>             # 收回全部提权
 bash lighthouse.sh test [id]             # 一键验收
 bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 / 配置
 ```
 
-## 对话里提权：想看更多，得你点头
+## 对话里提权：想看更多，谁说了算
 
 场景：miji 那扇窗只给了文档。对话里你说「把代码也给它看」——它是怎么拿到的？
 
@@ -202,17 +190,15 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 
 要点：
 
-- **默认 agent 无法自我提权**：没有你的批准，`request_access` 只能留下一条申请，`window_info` 里能查到；
-- **常驻策略是「你事先授权」**：`bash lighthouse.sh auto-grant <窗口> on --ceiling "src/**,docs/**"`
-  之后，落在上限内的申请直接生效、不用再跑命令；超出上限的照样转成待批。
-  不设 `--ceiling` 就是「任何范围申请都自动生效」（密钥拉黑与 exclude 仍然拦得住）。
-  策略是**实时读的**：`off` 一敲，下一次申请立刻回到 pending，不用重启服务；
-- **网页那边点的是另一层**：ChatGPT 弹的「允许使用 X？」是**平台自己的**工具调用确认，不是灯塔的授权。
-  开了自动授予之后，申请甚至可能**没有任何弹窗**就直接生效——所以 `--ceiling` 和审计日志才是你的知情手段。
-  要多松多紧由你定：`off` 回到逐次批准，`--ceiling` 圈定最大范围，`deny` 随时收回。
-- **提权不等于解禁**：`.env`、私钥、`exclude` 的目录，提权之后照样看不到（拉黑与排除压过一切授予）；
-- **三种给法**：常驻策略（`auto-grant`）、事后批准（`approve`）、事前预授权窗口（`elevate <id> 30 --scope "src/**"`，到期自动失效）；
-- **随时收回**：`deny <id>` 一把清空（额外范围 + 待批申请 + 预授权窗口）；`auto-grant <id> off` 关掉常驻策略。
+- **默认 agent 无法自我提权**：没有你的批准，`request_access` 只能留下一条申请（`window_info` 里能查到）；
+  而且授予只加宽 include，**压不过** exclude 与密钥拉黑——提权 ≠ 解禁；
+- **常驻策略是「你事先授权」**：`auto-grant <窗口> on --ceiling "src/**,docs/**"` 之后，上限内的申请直接生效、
+  不用再跑命令；超出上限照样转待批；不设 `--ceiling` 就是「任何范围申请都自动生效」。
+  策略**实时读**：`off` 一敲，下一次申请立刻回到 pending，不用重启服务；
+- **网页那边点的是另一层**：ChatGPT 弹的「允许使用 X？」是**平台自己的**工具调用确认，不是灯塔的授权；
+  开了自动授予之后，申请甚至可能**没有任何弹窗**就直接生效——`--ceiling` 与审计日志才是你的知情手段；
+- **三种给法、随时收回**：常驻策略 `auto-grant` / 事后批准 `approve` / 限时预授权 `elevate`；
+  `deny <id>` 一把清空，`auto-grant <id> off` 关掉常驻策略。
 
 这就是「把选择的权利交给你」的落地方式：**方便归方便，闸门永远在你手里。**
 
@@ -220,55 +206,38 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 
 ```
 lighthouse/
-├── lighthouse.sh            # 唯一入口（new/start/stop/status/url/publish/write/test/doctor）
-├── config.json              # 全局配置：域名 / 隧道 / 状态目录
-├── windows.json             # 窗口注册表：每扇窗的给看范围写在这里
-├── core/
-│   ├── server.py            # 窗口 MCP 服务（四道闸 + 脱敏 + 审计 + 写工具 + 提权申请）
-│   ├── config.py            # 配置读写
-│   ├── scope.py             # 范围授权（grant / pending / arm / ceiling 上限判定）
-│   ├── add_window.py        # 登记新窗口（不给范围时会问你）
-│   ├── render_services.py   # 生成 launchd / systemd 服务定义
-│   ├── render_ingress.py    # 生成隧道配置（单域名 + 路径分流）
-│   └── switch.py            # 写开关
-├── tests/
-│   ├── smoke_window.py      # 通用冒烟 13 项（任何窗口都能测）
-│   ├── audit_readonly.py    # 只读审计 46 项（含文件指纹前后比对）
-│   ├── test_write.py        # 写开关 25 项（关=全拒 / 开=全流程 / 关回=只读）
-│   ├── test_elevate.py      # 提权 29 项（申请≠授予 / 批准 / 收回 / 预授权 / 常驻策略 / 过期）
-│   ├── test_hardening.py    # 闸门加固 23 项（大小写绕过 / .git / 路径逃逸 / 枚举面）
-│   └── run_all_tests.sh     # 一键验收（自带临时实例，不碰线上）
-├── demo/project/            # 示例项目（含验证口令，用来证明"真的读到了本地"）
-└── docs/
-    ├── ARCHITECTURE.md      # 一扇窗是怎么被四道闸过滤的
-    ├── SECURITY.md          # 威胁模型与边界（该防的防，防不了的说清楚）
-    ├── CHATGPT.md           # 接网页版 ChatGPT 的完整步骤（含踩坑）
-    ├── OPEN_A_WINDOW.md     # 开窗四步 + 交代给别的 AI 的话术模板（中文）
-    └── ROADMAP.md           # 方向与缺口（认证/身份 → 资源适配器），标注了哪些「未实现」
+├── lighthouse.sh        # 唯一入口（new/start/stop/status/url/publish/write/elevate/auto-grant/approve/deny/scope/test/doctor）
+├── config.json          # 全局配置：域名 / 隧道 / 状态目录（*.local.json 覆盖，已 gitignore）
+├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
+├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
+│                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
+├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 29 / 加固 23）+ run_all_tests.sh
+├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
+└── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP
 ```
 
-## 它是怎么做到既方便又安全的
+## 四道闸是怎么落的
 
 **范围写在一处。** `windows.json` 里一条声明 = 一扇窗：
 
 ```json
 "myproj": {
-  "title": "我的项目",
-  "root": "~/code/myproj",                 // 只看这棵树
-  "include": ["README.md", "docs/**", "src/**"],   // 只给看这些
-  "exclude": ["private/**"],               // 这些连子树一起排除
-  "port": 8940,
-  "path": "/w-myproj-6m1yo0",              // 路径带随机段（当弱口令）
-  "visibility": "local",                   // local=私密，发布时会被拦下
-  "write": { "enabled": true }             // 允许被开写权限（默认仍然关着）
+  "root": "~/code/myproj",                         // ① 根界闸：只看这棵树，realpath 出界一律拒（符号链接穿透也拦）
+  "include": ["README.md", "docs/**", "src/**"],   // ③ include 闸：只放行这些 glob
+  "exclude": ["private/**"],                       // ② exclude 闸：命中连子树一起排除（大小写变体也拦）
+  "path": "/w-myproj-6m1yo0",                      // 路径带随机段（不可枚举，但不是认证 —— 见 docs/SECURITY.md）
+  "visibility": "local",                           // local = 私密，发布时会被拦下
+  "write": { "enabled": true }                     // 写权限总闸（默认关；还要运行时开关才真正可写）
 }
 ```
 
-改范围 = 改一个文件，不用动代码。
+④ **默认拉黑永远排在最前**：`.env*`、`*.pem`、`id_rsa*`、`*secret*`、`*token*`、`*.db`、整个 `.git/` ——
+无条件拒绝，include 写多宽都压不过，大小写变体（`.ENV`）一并拦。出口还会过一遍**脱敏**
+（`sk-… / ghp_… / 私钥块` → `«REDACTED»`，检索片段也算）。
 
-**判定失败就往拒绝走（fail-closed）。** 路径解析异常、匹配不出来、任何说不清的情况——一律拒绝，然后记进审计。
-
-**多窗口共用一个域名。** 靠路径分流到各自端口：加窗口不用再动 DNS，`publish` 一条命令重建分流表。
+改范围 = 改这一个文件，不用动代码。**判定失败就往拒绝走**（fail-closed）：路径解析异常、匹配不出来、
+任何说不清的情况，一律拒绝并记进审计。**多窗口共用一个域名**，靠路径分流到各自端口——
+加窗口不用再动 DNS，`publish` 一条命令重建分流表。
 
 ## 依赖与致谢
 
@@ -279,8 +248,8 @@ lighthouse/
 | cloudflared | 把本机端口安全地放到公网（出站隧道，无需开端口） | https://github.com/cloudflare/cloudflared |
 | macOS launchd / Linux systemd | 守护窗口服务（开机自启、挂了自动拉起） | 系统自带 |
 
-**特别感谢**：Model Context Protocol 团队把「AI 怎么接外部世界」这件事做成了公开协议；
-Cloudflare 的 cloudflared 让「不出站也安全」变成了默认选项。没有这两样，灯塔就只是一堆本地脚本。
+**特别感谢**：MCP 团队把「AI 怎么接外部世界」做成了公开协议，cloudflared 让「不出站也安全」成为默认选项——
+没有这两样，灯塔只是一堆本地脚本。
 
 ## 踩坑速查（都是实际撞过的）
 
@@ -295,12 +264,11 @@ Cloudflare 的 cloudflared 让「不出站也安全」变成了默认选项。�
 
 ## 更新日志
 
-- **v1.2** —— 常驻提权策略 `auto-grant`（`bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"] | off | status`）：
-  开启后**上限内的申请立即生效，不用再跑本地命令**；超出上限仍转待批；策略实时读注册表，`off` 一敲立刻收紧（不用重启服务）；
-  配置可疑一律 fail-closed。修两处：CLI 与服务的注册表路径统一（`LIGHTHOUSE_REGISTRY` > `WINDOW_REGISTRY`，此前 CLI 可能改到另一份文件），
-  `restart` 不再因 `$0` 是相对路径而「command not found」。第 4 套测试扩到 28 项，测试总数 112 项。
-- **v1.1** —— 对话内提权（`request_access` 申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围（不给范围时会问你，脚本环境拒绝静默默认）+ 第 4 套测试（提权 18 项）+ 本机私有配置 `*.local.json` 约定。测试总数 102 项。
-- **v1.0** —— 首个开源版本：四道闸、脱敏、审计、写开关（两级锁）、三套自带测试、多窗口路径分流、launchd/systemd 服务生成。
+- **v1.2** —— 常驻提权策略 `auto-grant`（上限内的申请立即生效，超出仍待批；策略实时读，`off` 立刻收紧）；
+  闸门加固（大小写绕过、`.git/` 整目录、密钥名变体）；新增第 5 套「加固」攻击性测试，共 136 项。
+  另修两处：CLI 与服务的注册表路径统一、`restart` 不再因 `$0` 相对路径失败。
+- **v1.1** —— 对话内提权（申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围 + 第 4 套测试（共 102 项）。
+- **v1.0** —— 首个开源版：四道闸、脱敏、审计、写开关两级锁、三套测试、多窗口路径分流、launchd/systemd 服务生成。
 
 ## 作者
 
