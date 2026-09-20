@@ -124,7 +124,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 51/51   ✅ 加固 49/49
+#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 56/56   ✅ 加固 49/49
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -205,6 +205,8 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
 - **本机 agent 少跑命令：对话内授权**——`chat-approval <id> on` 之后，agent 申请、你在对话里回一句
   「授权你」、它带 `user_confirmed=true` 再申请一次即生效（全程不用碰终端）。⚠️ 这是**信任式**通道
   （服务端验证不了「你真说了同意」，它信任 agent 的转述）：默认关，只给**本机/可信 agent** 开，网页 AI 窗口不要开。
+- **写范围记得带通配**：`--scope "dir/"` 只覆盖目录条目本身、读不到目录里的文件；要放开目录内的文件写 `dir/**`。
+  （授予回执现在会对这类 pattern 当场提示，不会再出现「批准了却读不到」的错觉。）
 
 这就是「把选择的权利交给你」的落地方式：**方便归方便，闸门永远在你手里。**
 
@@ -217,7 +219,7 @@ lighthouse/
 ├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
 ├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
-├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 51 / 加固 49）+ run_all_tests.sh
+├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 56 / 加固 49）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -274,7 +276,7 @@ lighthouse/
   闸门加固（大小写绕过、`.git/` 整目录、密钥名变体）；新增第 5 套「加固」攻击性测试；
   **授权时长可自选**（`--for 30m|2h|1d|7d|forever`，`approve` / `elevate` / `auto-grant --ttl` 通用）；
   新增**对话内授权**（`chat-approval`：你回一句「授权你」即生效；默认关、信任式通道，仅限本机可信 agent）；服务端改用**无状态传输**（`stateless_http`），重启服务不再作废已连客户端的会话——
-  不自动重连的客户端（如 WorkBuddy）不会再报「Session not found」，共 184 项。
+  不自动重连的客户端（如 WorkBuddy）不会再报「Session not found」，共 189 项。
   另修两处：CLI 与服务的注册表路径统一、`restart` 不再因 `$0` 相对路径失败。
 - **v1.1** —— 对话内提权（申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围 + 第 4 套测试（共 102 项）。
 - **v1.0** —— 首个开源版：四道闸、脱敏、审计、写开关两级锁、三套测试、多窗口路径分流、launchd/systemd 服务生成。

@@ -447,8 +447,16 @@ def _iter_files(base: Path, depth: int):
 @server.tool(description="本窗口的给看范围声明：根目录、include/exclude、上限、可见性。")
 def window_info() -> str:
     _audit("window_info", {}, True)
-    return _dump({**WIN.scope_summary(),
-                  "tools": ["window_info", "list_files", "read_file", "search", "request_access"]})
+    summ = WIN.scope_summary()
+    write_tools = ["write_file", "edit_file", "make_dir", "delete_file"]
+    writable = bool((summ.get("write") or {}).get("currently_writable"))
+    return _dump({**summ,
+                  "tools": ["window_info", "list_files", "read_file", "search", "request_access"] + write_tools,
+                  "tools_note": ("写族四个（" + " / ".join(write_tools) + "）当前可用"
+                                 "（写开关开着；仍受 include/exclude/拉黑与 confirm 约束）。"
+                                 if writable else
+                                 "写族四个（" + " / ".join(write_tools) + "）当前在只读模式下不可用；"
+                                 "用户开写开关（lighthouse.sh write <id> on）后可用。")})
 
 
 @server.tool(description="列出窗口范围内的文件（越界/拉黑文件不会出现）。path 为窗口内相对路径，depth 默认 3。")
@@ -576,6 +584,11 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
         _audit("request_access", {"include": include, "reason": reason}, False, {"reason": bad})
         return _dump({"error": bad, "window": WIN.id})
 
+    # 「只覆盖目录本身」的 pattern（如 `code/`）收下也不会放行其下文件 —— 授予成功却读不到，
+    # 必须当场提示，避免「用户以为同意了、agent 以为拿到了」的错觉。
+    dir_hint = SCOPE.dir_only_hint(WIN.root, clean)
+    extra = {"hint": dir_hint} if dir_hint else {}
+
     ok, why = SCOPE.arm_allows(WIN.id, clean)
     arm = SCOPE.active_arm(WIN.id)
     if ok and arm:
@@ -588,6 +601,7 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
             "now_visible": clean,
             "until": g["until"],
             "message": "已在预授权窗口内批准。现在可以读这些范围了；到期自动收回。",
+            **extra,
         })
 
     # 用户为这扇窗声明了「申请即授予」→ 上限内直接生效，不必再跑本地命令。
@@ -616,6 +630,7 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
                             + ("（到期自动收回）。" if ttl else "（无期限，直到被收回）。")
                             + "密钥默认拉黑与 exclude 照旧生效。"),
                 "note": "用户已为该窗口开启自动授予；若这不是用户本意，用户可在部署机上改策略或 deny 立即收回。",
+                **extra,
             })
         why = why_c
 
@@ -648,6 +663,7 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
                                 + ("（到期自动收回）。" if ttl else "（无期限，直到被收回）。")
                                 + "密钥默认拉黑与 exclude 照旧生效。"),
                     "note": "该通道信任 agent 的转述；若不是用户本意，用户可 deny 立即收回，或关掉该窗口的 chat_approval。",
+                    **extra,
                 })
             why = why_c
         else:
@@ -668,9 +684,11 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
                     f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
                     "（想一次给一段时间就加 `--for 2h`；可用 30m / 2h / 1d / 7d / forever，不写 = 无期限）"
                     + chat_hint
+                    + (f"\n（提示：{dir_hint}）" if dir_hint else "")
                     + (f"\n（预授权检查：{why}）" if arm is not None else "")),
         "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要用户亲自批准，不会自动生效。"
                  if auto else "agent 无法自我提权：没有用户的批准，这个申请不会改变任何可见范围。"),
+        **extra,
     })
 
 

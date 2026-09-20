@@ -17,6 +17,7 @@
   ⑨ 时长可自选（30m / 2h / 1d / forever）：解析不吞错；approve --for 30m 真的落成
      30 分钟有效期；auto-grant --ttl 2h 让每次自动授予带 2 小时到期
   ⑩ 对话内授权（chat_approval）：默认关时 user_confirmed 也落待批（fail-closed）；
+  ⑪ 「只覆盖目录本身」的 pattern（如 `code/`）授予回执当场提示；`code/**` 才放行文件
      开启后用户在对话里同意 → agent 带 user_confirmed=true 即生效；带 ceiling 上限约束；
      关掉后立即回到待批
 
@@ -290,6 +291,30 @@ async def main() -> int:
                                  {"include": ["**/*"], "reason": "超出上限", "user_confirmed": True})
                 check("超出上限的 user_confirmed 仍转待批", c14.get("status") == "pending",
                       json.dumps(c14, ensure_ascii=False)[:80])
+
+                print("\n⑪ 「只覆盖目录本身」的 pattern 当场提示（修自 WorkBuddy 实测反馈）")  # §dir-only
+                # 回归：申请 `code/` 被原样收下、granted 看着成功，但读 code/app.py 依旧被拒——
+                # 授予校验与读取校验是两套匹配，容易造成「用户以为同意了、agent 以为拿到了」。
+                # 现在：授予回执必须带 hint；语义不放宽；CLI 批准同样提示。
+                cli("deny", "elev", env=env)
+                reg = json.loads(registry.read_text(encoding="utf-8"))
+                reg["windows"]["elev"]["chat_approval"] = True
+                reg["windows"]["elev"].pop("elevation_ceiling", None)
+                registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+                d = await call(session, "request_access",
+                               {"include": ["code/"], "reason": "想读代码目录", "user_confirmed": True})
+                check("`code/` 授予回执带「只覆盖目录本身」提示（不再假成功）",
+                      d.get("status") == "granted" and "code/**" in (d.get("hint") or ""),
+                      json.dumps(d, ensure_ascii=False)[:90])
+                dd = await call(session, "read_file", {"path": "code/app.py"})
+                check("`code/` 授权后其下文件仍不可读（语义未放宽）", "content" not in dd, dd.get("error", "")[:50])
+                d2 = await call(session, "request_access",
+                                {"include": ["code/**"], "reason": "补齐通配", "user_confirmed": True})
+                check("`code/**` 回执不带该提示", not d2.get("hint"), json.dumps(d2, ensure_ascii=False)[:80])
+                dd2 = await call(session, "read_file", {"path": "code/app.py"})
+                check("`code/**` 授权后文件可读", bool(dd2.get("content")), dd2.get("error", "")[:50])
+                out = cli("approve", "elev", "--scope", "docs/", env=env)
+                check("CLI approve 对目录 pattern 也打提示", "docs/**" in out, (out or "").replace("\n", " ")[:90])
 
     finally:
         srv.terminate()

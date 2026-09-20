@@ -193,6 +193,14 @@ if not m:
     raise SystemExit(1)
 arm = S.set_arm(wid, int(m), allowed, note="CLI 预授权窗口")
 print(f"✅ 已开预授权窗口: {wid} — {S.describe_duration(int(m))}，范围上限 {allowed or '不限（申请多少批多少，密钥/exclude 仍不可见）'}")
+try:
+    import config as C
+    _hint = S.dir_only_hint(C.window_root(C.windows()[wid]), allowed)
+    if _hint:
+        print("⚠️  " + _hint)
+except Exception:
+    pass
+
 print("   期间 agent 调 request_access 会在上限内自动批准；到期自动失效。")
 print(f"   想提前收回：bash lighthouse.sh deny {wid}")
 PYEOF
@@ -228,6 +236,14 @@ except ValueError as e:
     raise SystemExit(1)
 g = S.set_grant(wid, include, mins, note=(pend.get("reason") or "CLI 批准")[:200])
 print(f"✅ 已批准 {wid}：额外可见 {g['include']}")
+try:
+    import config as C
+    _hint = S.dir_only_hint(C.window_root(C.windows()[wid]), include)
+    if _hint:
+        print("⚠️  " + _hint)
+except Exception:
+    pass
+
 print("   授权时长：" + (f"{S.describe_duration(mins)}（{S._describe_until(g['until'])}）" if g["until"] else "无期限（用 `bash lighthouse.sh deny " + wid + "` 收回）"))
 if pend:
     print("   （申请的缘因：" + (pend.get("reason") or "未填写") + "）")

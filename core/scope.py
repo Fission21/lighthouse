@@ -314,3 +314,39 @@ if __name__ == "__main__":
         print(f"已清空 {wid} 的授权（grant/pending/arm 全撤）")
     else:
         print(__doc__)
+
+
+# ---------------------------------------------------------------- 提示类（不做闸门，只做提示）
+def dir_only_patterns(root, patterns) -> list[str]:
+    """挑出「只覆盖目录条目本身、覆盖不到其下文件」的 pattern。
+
+    两类：① 以 `/` 结尾（`tools/`）；② 不带通配符、且指向一个真实存在的目录（`tools`）。
+    这类 pattern 会被授予流程原样收下并报成功，但读它下面的文件（如 `tools/kb.py`）不会被放行——
+    两套匹配（授予校验 / 读取校验）的落差就在这里，容易造成「用户以为同意了、agent 以为拿到了」。
+    调用方负责把结果变成提示（见 dir_only_hint）。
+    """
+    out: list[str] = []
+    for p in patterns or []:
+        s = str(p).strip()
+        if not s:
+            continue
+        if s.endswith("/"):
+            out.append(s)
+            continue
+        if not re.search(r"[*?\[]", s):
+            try:
+                if (Path(root) / s).is_dir():
+                    out.append(s)
+            except OSError:
+                continue
+    return out
+
+
+def dir_only_hint(root, patterns) -> str:
+    """把 dir_only_patterns 的结果变成一句提示（没有此类 pattern 时返回空串）。"""
+    ds = dir_only_patterns(root, patterns)
+    if not ds:
+        return ""
+    who = "、".join(f"「{d}」" for d in ds)
+    fix = "、".join(f"「{d.rstrip('/')}/**」" for d in ds)
+    return f"{who} 只覆盖目录条目本身、读不到目录里的文件；要放开目录内的文件请改用 {fix}。"

@@ -133,7 +133,7 @@ pip install mcp
 
 # 1) Spin up the sample window and verify the whole chain (no internet needed)
 bash lighthouse.sh test            # temp instance → five suites → auto cleanup
-#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 51/51   ✅ hardening 49/49
+#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 56/56   ✅ hardening 49/49
 
 # 2) Open a window onto YOUR project
 #    Without a scope it will ASK you how much to expose — it never defaults to "everything"
@@ -232,7 +232,7 @@ lighthouse/
 ├── windows.json         # window registry: the visible scope of every window lives here
 ├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
-├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 51 / hardening 49) + run_all_tests.sh
+├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 56 / hardening 49) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -294,7 +294,7 @@ nothing but a pile of local scripts.
   (`--for 30m|2h|1d|7d|forever`; `auto-grant --ttl` makes each auto-grant expire). New: in-chat approval
   (`chat-approval` — the user says "I authorize it" in the conversation; opt-in, trust-based, local agents only). The server now runs **stateless HTTP** (`stateless_http`): restarting it no longer
   invalidates connected clients' sessions — clients that never re-handshake (e.g. WorkBuddy) no longer hit
-  "Session not found". — 184 checks total.
+  "Session not found". — 189 checks total.
 - **v1.1** — in-chat elevation (request-only + `approve` / `elevate` / `deny` / `scope`) · scope is asked at
   window-creation time (never silently defaults to `**/*`) · 4th test suite (102 checks total).
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,
