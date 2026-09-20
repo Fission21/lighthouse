@@ -8,3 +8,8 @@ windows.local.json
 
 # 说明：demo/project/docs/.env 是**故意提交**的演示用假密钥文件，
 # 用来验证「密钥类文件读不到」。不要把它加进忽略列表。
+
+# 私有注册表/配置的任何备份与变体（*.bak-YYMMDD-HHMMSS 等）也不进库
+windows.local.json.*
+config.local.json.*
+*.bak-*

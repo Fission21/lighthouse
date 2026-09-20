@@ -133,7 +133,7 @@ pip install mcp
 
 # 1) Spin up the sample window and verify the whole chain (no internet needed)
 bash lighthouse.sh test            # temp instance → five suites → auto cleanup
-#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 29/29   ✅ hardening 23/23
+#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 29/29   ✅ hardening 47/47
 
 # 2) Open a window onto YOUR project
 #    Without a scope it will ASK you how much to expose — it never defaults to "everything"
@@ -228,7 +228,7 @@ lighthouse/
 ├── windows.json         # window registry: the visible scope of every window lives here
 ├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
-├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 29 / hardening 23) + run_all_tests.sh
+├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 29 / hardening 47) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```

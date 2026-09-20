@@ -12,7 +12,7 @@
 覆盖：
   ① 拉黑名单：.env / id_rsa / *.pem / credentials / token / apikey 及其大小写变体
   ② 版本库内部：.git/config、.git/logs/HEAD、.git/HEAD 一律不可读
-  ③ exclude 与 include 的大小写一致性（不能靠大写绕过排除目录）
+  ③ exclude 与 include 的大小写一致性（不能靠大写绕过排除目录，也不靠 list/search 绕出内容）
   ④ 路径逃逸：../ 与指向库外的符号链接
   ⑤ 体积上限：超过 max_file_kb 的文件被拒
   ⑥ 枚举面：list_files 不列出被拉黑项，search 不把拉黑文件的内容带出来
@@ -20,6 +20,7 @@
   ⑧ include 写成 `dir/**` 时，目录本身必须可列举
   ⑨ 「按类型给看」的 include（`**/*.py`）不能让目录树在列举时消失
   ⑩ 公网入口只含 public 窗口（visibility=local 的必须被剔除）
+  ⑪ `?` 单字符通配符：只吃一个字符、不跨 `/`；exclude 目录的**列举/检索**面不泄漏
 
 用法: python3 test_hardening.py [--keep]
 """
@@ -91,6 +92,16 @@ async def main() -> int:
     (root / "src" / "config" / ".env").write_text("SECRET=src-env\n", encoding="utf-8")
     (root / "docs" / "big.txt").write_text("x" * (900 * 1024), encoding="utf-8")
     (root / "private" / "plan.md").write_text("被 exclude 的目录\n", encoding="utf-8")
+    # ⑪ 用：`?` 形态的样本
+    (root / "q" / "sub").mkdir(parents=True)
+    (root / "q" / "file1.md").write_text("一号\n", encoding="utf-8")
+    (root / "q" / "file2.md").write_text("二号\n", encoding="utf-8")
+    (root / "q" / "file10.md").write_text("十号（? 只吃一个字符，不该命中）\n", encoding="utf-8")
+    (root / "q" / "file.md").write_text("零号（? 不吃空字符）\n", encoding="utf-8")
+    (root / "q" / "sub" / "file1.md").write_text("子目录里的（? 不跨 /）\n", encoding="utf-8")
+    (root / "a").mkdir(parents=True)
+    (root / "aXb.txt").write_text("一问号命中\n", encoding="utf-8")
+    (root / "a" / "b.txt").write_text("斜杠不该被 ? 吃掉\n", encoding="utf-8")
     (root / ".git" / "config").write_text('[remote "origin"]\n\turl = https://u:GHTOKEN@github.com/x/y.git\n', encoding="utf-8")
     (root / ".git" / "logs" / "HEAD").write_text("0000 aa Someone <a@b.c> 1 +0800\tcommit: init\n", encoding="utf-8")
     (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
@@ -156,6 +167,14 @@ async def main() -> int:
                 check("大写 PRIVATE/ 不能绕过 exclude private/**", "content" not in d, d.get("error", "")[:40])
                 d = await call(session, "read_file", {"path": "private/plan.md"})
                 check("小写 private/ 同样被排除", "content" not in d, d.get("error", "")[:40])
+                # 被 exclude 的目录：列举与检索两条路也不能漏内容（只堵 read 不算堵住）
+                d = await call(session, "list_files", {"path": "private"})
+                check("list_files('private') 被拒（exclude 目录）",
+                      "files" not in d and "exclude" in str(d.get("error", "")), str(d)[:70])
+                d = await call(session, "list_files", {"path": "PRIVATE"})
+                check("list_files('PRIVATE') 同样被拒（大小写不敏感）", "files" not in d, str(d)[:70])
+                se = json.dumps(await call(session, "search", {"keyword": "被 exclude", "limit": 5}), ensure_ascii=False)
+                check("search 不返回被 exclude 目录里的内容", "private/plan.md" not in se, se[:80])
 
                 print("\n④ 路径逃逸")
                 d = await call(session, "read_file", {"path": "../../etc/hosts"})
@@ -286,6 +305,54 @@ async def main() -> int:
             check("public 窗口写进 ingress", "/w-pub" in text)
             check("visibility=local 的窗口不写进 ingress", "/w-priv" not in text, text[:80])
             check("没写 visibility 时按 local 处理（默认不对外）", "/w-def" not in text)
+
+            print("\n⑪ `?` 通配符：只吃一个字符，且不跨目录分隔符")
+            # 与 ⑧⑨ 同族：glob 形态盘点的最后一种（`x/**`、`**/*`、`**/*.py`、`dir/**` 已覆盖）。
+            port4 = free_port()
+            reg = json.loads(registry.read_text(encoding="utf-8"))
+            reg["windows"]["hard4"] = {
+                "title": "问号窗", "root": str(root),
+                "include": ["q/file?.md", "a?b.txt"], "exclude": [], "deny_extra": [],
+                "port": port4, "path": "/w-hard4", "visibility": "local",
+                "write": {"enabled": False},
+            }
+            registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            env4 = {**env, "WINDOW_ID": "hard4", "WINDOW_PORT": str(port4), "WINDOW_PATH": "/w-hard4"}
+            srv4 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env4,
+                                    stdout=open(tmp / "server4.log", "wb"), stderr=subprocess.STDOUT)
+            try:
+                for _ in range(40):
+                    with socket.socket() as s_:
+                        if s_.connect_ex(("127.0.0.1", port4)) == 0:
+                            break
+                    time.sleep(0.5)
+                async with streamable_http_client(f"http://127.0.0.1:{port4}/w-hard4") as (r4, w4):
+                    async with ClientSession(r4, w4) as s4:
+                        await s4.initialize()
+                        d = await call(s4, "read_file", {"path": "q/file1.md"})
+                        check("q/file1.md 命中 `file?.md` 可读", bool(d.get("content")), d.get("error", "")[:40])
+                        d = await call(s4, "read_file", {"path": "q/file10.md"})
+                        check("q/file10.md 不命中（? 只吃一个字符）", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s4, "read_file", {"path": "q/file.md"})
+                        check("q/file.md 不命中（? 不吃空字符）", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s4, "read_file", {"path": "a/b.txt"})
+                        check("a/b.txt 不命中（? 不跨目录分隔符 /）", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s4, "read_file", {"path": "aXb.txt"})
+                        check("aXb.txt 命中（? 吃一个普通字符）", bool(d.get("content")), d.get("error", "")[:40])
+                        d = await call(s4, "read_file", {"path": "q/sub/file1.md"})
+                        check("深层路径不因 ? 被放行", "content" not in d, d.get("error", "")[:40])
+                        d = await call(s4, "list_files", {"path": "q"})
+                        paths = [f.get("path") for f in (d.get("files") or [])]
+                        check("列 q 目录只出现命中项（file1/file2；file10 与 sub/ 里的不出现）",
+                              "q/file1.md" in paths and "q/file2.md" in paths
+                              and not any("file10" in x or "/sub/" in x for x in paths),
+                              json.dumps(paths, ensure_ascii=False)[:80])
+            finally:
+                srv4.terminate()
+                try:
+                    srv4.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    srv4.kill()
 
     finally:
         srv.terminate()

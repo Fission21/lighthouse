@@ -31,7 +31,7 @@
 ## 测试证明了什么、不证明什么
 
 ```bash
-bash tests/run_all_tests.sh      # 五套 136 项，自带隔离实例，不碰线上
+bash tests/run_all_tests.sh      # 五套 160 项，自带隔离实例，不碰线上
 ```
 
 **证明（可复现的事实）**：

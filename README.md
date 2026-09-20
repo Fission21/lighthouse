@@ -124,7 +124,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 29/29   ✅ 加固 23/23
+#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 29/29   ✅ 加固 47/47
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -211,7 +211,7 @@ lighthouse/
 ├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
 ├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
-├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 29 / 加固 23）+ run_all_tests.sh
+├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 29 / 加固 47）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```

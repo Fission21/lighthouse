@@ -68,9 +68,12 @@
 - **进展（2026-09-18）**：写了 glob 形态探测，四组配置（`src/**`、`**/*.py`、`*.md`+`docs/**`、
   `docs/**/v1.md`）× 列目录/读文件全跑一遍 —— **又挖出 #15**（已修），
   并把 `dir/**`（第 ⑧ 节）与 `**/*.py`（第 ⑨ 节）两组固化成回归测试。
-  `?` 单字符与 exclude 目录列举尚未单独覆盖。
+- **已修（2026-09-20）**：最后两个盲区补齐 —— 新增第 ⑪ 节 7 项（`?` 只吃一个字符、
+  不吃空字符、不跨目录分隔符 `/`；列 `q` 目录只出现命中项），③ 节补 3 项
+  （`list_files("private")` / `list_files("PRIVATE")` 被拒、`search` 不返回被 exclude 目录里的内容）。
+  加固套件 37 → **47 项**，五套合计 **160 项**全绿。
 
-- **状态**：进行中
+- **状态**：已修
 
 ### #12 网页 AI 平台的中间审查层没有应对手段
 
@@ -93,7 +96,13 @@
 - **命令**：`bash lighthouse.sh deny trial` → 从 `windows.local.json` 删除该条 → `bash lighthouse.sh restart`
 - **区域**：运维
 - **严重度**：低
-- **状态**：待定（等验收结论）
+- **已处理（2026-09-20）**：验收收官（8 个问题全修、五套 160 项全绿）后按上条命令退役：
+  授权已收回、注册表条目已删、launchd 服务已卸（plist 删除）、隧道 ingress 已重生成。
+  公网实测 `/w-trial-gicwpq → 404`、本机 8941 端口已关；其余三窗复测 beacon/miji 200、demo 404（私密）。
+  `~/demo/trial-window`（208K 验收素材）**保留**，重建一扇验收窗：
+  `bash lighthouse.sh new trial ~/demo/trial-window --include "README.md,docs/**,src/**" --exclude "src/internal/**" --public`
+  —— #14 的对照实验还会用到它。
+- **状态**：已处理
 
 <!-- NEW-ISSUES-HERE -->
 
