@@ -21,6 +21,7 @@
   ⑨ 「按类型给看」的 include（`**/*.py`）不能让目录树在列举时消失
   ⑩ 公网入口只含 public 窗口（visibility=local 的必须被剔除）
   ⑪ `?` 单字符通配符：只吃一个字符、不跨 `/`；exclude 目录的**列举/检索**面不泄漏
+  ⑫ 无状态模式：旧会话 id / 无会话 id 的裸 POST 不再被拒（服务重启对已连客户端无感）
 
 用法: python3 test_hardening.py [--keep]
 """
@@ -33,6 +34,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from mcp import ClientSession
@@ -353,6 +356,55 @@ async def main() -> int:
                     srv4.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     srv4.kill()
+
+            print("\n⑫ 无状态模式：重启服务后，客户端手里的旧会话 id 不会失效")
+            # 回归：WorkBuddy 这类客户端不会自动重新握手，服务重启后继续拿旧 mcp-session-id
+            # 调用；会话模式下服务端回 “Session not found” → 对方误以为「找不到 mcp 环境」。
+            # 无状态模式（stateless_http）下旧会话 id 被直接忽略、无会话 id 也照常工作。
+            port5 = free_port()
+            reg = json.loads(registry.read_text(encoding="utf-8"))
+            reg["windows"]["hard5"] = {
+                "title": "无状态窗", "root": str(root),
+                "include": ["**/*.md"], "exclude": [], "deny_extra": [],
+                "port": port5, "path": "/w-hard5", "visibility": "local",
+                "write": {"enabled": False},
+            }
+            registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            env5 = {**env, "WINDOW_ID": "hard5", "WINDOW_PORT": str(port5), "WINDOW_PATH": "/w-hard5"}
+            srv5 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env5,
+                                    stdout=open(tmp / "server5.log", "wb"), stderr=subprocess.STDOUT)
+
+            def raw_call(body: dict, sid: str | None = None) -> tuple:
+                hdrs = {"Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream"}
+                if sid:
+                    hdrs["mcp-session-id"] = sid
+                req = urllib.request.Request(f"http://127.0.0.1:{port5}/w-hard5",
+                                             data=json.dumps(body).encode(), headers=hdrs, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        return resp.status, resp.read().decode("utf-8", "replace")
+                except urllib.error.HTTPError as e:
+                    return e.code, e.read().decode("utf-8", "replace")
+
+            try:
+                for _ in range(40):
+                    with socket.socket() as s_:
+                        if s_.connect_ex(("127.0.0.1", port5)) == 0:
+                            break
+                    time.sleep(0.5)
+                body_req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {"name": "window_info", "arguments": {}}}
+                st, body = raw_call(body_req)
+                check("无会话 id 直接调工具也通（无状态）", st == 200 and "hard5" in body, f"{st} {body[:70]}")
+                st, body = raw_call(body_req, sid="deadbeef-old-session-from-before-restart")
+                check("过期/伪造的会话 id 被忽略、调用照常成功", st == 200 and "hard5" in body, f"{st} {body[:70]}")
+            finally:
+                srv5.terminate()
+                try:
+                    srv5.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    srv5.kill()
 
     finally:
         srv.terminate()
