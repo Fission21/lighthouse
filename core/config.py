@@ -133,6 +133,39 @@ def auto_grant_policy(cfg: dict) -> tuple[bool, list[str]]:
     return True, clean
 
 
+def window_bind(cfg: dict) -> str:
+    """监听地址。默认 127.0.0.1（只有本机能连）。
+
+    用户可以显式写 "0.0.0.0"：同网段的设备（手机 / 另一台电脑上的 AI 客户端）
+    就能用「本机局域网 IP:端口」直连 —— 不用域名、不用隧道。⚠️ 局域网内可见，
+    路径里的随机段就是那道弱口令；只在可信网络开。启动时读取（改完要 restart）。
+    """
+    b = str(cfg.get("bind") or "").strip()
+    return b or "127.0.0.1"
+
+
+def window_json_response(cfg: dict) -> bool:
+    """POST 回应用纯 JSON（application/json）而不是 SSE 帧（text/event-stream）。
+
+    给「不吃 SSE 的隧道 / 客户端」用（部分内网穿透、部分老客户端）。
+    默认关 —— 标准 MCP 客户端两种都吃，SSE 是默认形态。启动时读取（改完要 restart）。
+    """
+    return cfg.get("json_response") is True
+
+
+def lan_ip() -> str:
+    """本机在当前网络里的局域网 IP（取不到返回空串）。"""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.168.1.1", 80))   # 不发包，只为选路
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return ""
+
+
 def window_url(cfg: dict, win_id: str, public: bool = False) -> str:
     if public:
         return f"https://{load()['hostname']}{cfg['path']}"

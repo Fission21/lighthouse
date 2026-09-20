@@ -33,7 +33,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
   一条一个问题，**证据必须能复现**（审计原文 / 命令输出 / 报错文字）；修完把它移到「已修」并补 commit 号。
   别在聊天里口头说一句就算——**散在对话里的问题等于没记**。
 - **窗口范围只写在 `windows.json`**——不要在任何别的文件里重复定义范围。
-- **提权策略也只在 `windows.json`**：`auto_grant`（申请即授予）+ `elevation_ceiling`（最大范围上限）+ `auto_grant_ttl_minutes`（每次自动授予的时长，缺省 = 无期限）+ `chat_approval`（对话内授权，信任式，默认关）。
+- **提权策略也只在 `windows.json`**：`auto_grant`（申请即授予）+ `elevation_ceiling`（最大范围上限）+ `auto_grant_ttl_minutes`（每次自动授予的时长，缺省 = 无期限）+ `chat_approval`（对话内授权，信任式，默认关）+ `bind`（监听地址，默认 `127.0.0.1`；`lan` 命令写 `0.0.0.0` 开局域网直连）+ `json_response`（纯 JSON 回应，给不吃 SSE 的隧道/客户端，默认关）。`bind` 与 `json_response` 在服务启动时读取，改完要 `restart`。
   **策略是实时读的**（每个 `request_access` 现读注册表），所以改这里立刻生效、收紧也是立刻的；
   但改 `core/*.py` 的**代码**必须 `bash lighthouse.sh restart` 才生效（服务是长驻进程）。
 - **本机私有配置优先**：`config.local.json` / `windows.local.json`（已 gitignore）存在时优先于
@@ -48,7 +48,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 ## 改完必须做的验证
 
 ```bash
-bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开关 25 / 提权 56 / 加固 49，必须全绿
+bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开关 25 / 提权 56 / 加固 55，必须全绿
 ```
 
 任何安全相关的改动（闸门、脱敏、写路径、提权）都要补一条测试——测试套件是这个项目的安全承诺书。

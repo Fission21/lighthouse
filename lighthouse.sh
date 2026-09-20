@@ -11,6 +11,8 @@
 #   url <id> [--public]  打印窗口地址（本机 / 公网）
 #   publish              生成隧道配置 + 重启隧道 + 公网健康检查（会拦 visibility=local 的窗口）
 #   write <id> on [分钟] | off | status    写开关（默认全只读）
+#   lan <id> on|off|status            局域网直连：同网段设备用「本机 IP:端口」访问（不用域名/隧道）
+#   json-response <id> on|off|status  POST 回应改纯 JSON（给不吃 SSE 的隧道/客户端；默认 SSE 帧）
 #   elevate <id> [分钟|--for 2h] [--scope "src/**"]
 #                                           预授权窗口：期间 agent 的范围申请在上限内自动批
 #   auto-grant <id> on [--ceiling "src/**,docs/**"] [--ttl 2h|forever] | off | status
@@ -67,6 +69,8 @@ if not reg:
     print(f"没有这个窗口: {sys.argv[2]}"); raise SystemExit(1)
 pub = sys.argv[3] == "--public"
 print(f"本机 : http://127.0.0.1:{reg['port']}{reg['path']}")
+if C.window_bind(reg) == "0.0.0.0":
+    print(f"局域网: http://{C.lan_ip() or '<本机局域网IP>'}:{reg['port']}{reg['path']}   （同网段设备可直连）")
 print(f"公网 : https://{C.load()['hostname']}{reg['path']}" + ("" if pub else "   （记得先 publish，且窗口要标 --public）"))
 PYEOF
     ;;
@@ -471,6 +475,72 @@ print(f"✅ 已为 {wid} 开启「对话内授权」")
 print(f"   上限：{ceiling or '不限（拉黑/exclude 照旧压过一切）'}")
 print("   流程：agent 申请 → 你回一句「授权你」→ 它带 user_confirmed=true 再申请 → 即时生效（不用跑命令）")
 print(f"   想收紧：bash lighthouse.sh chat-approval {wid} off（或 deny 立即收回）")
+PYEOF
+    ;;
+
+  lan)
+    # 局域网直连（不用域名、不用隧道）：on 后同网段设备可用「本机局域网 IP:端口」访问
+    id="${2:?用法: lighthouse.sh lan <窗口id> on|off|status}"; act="${3:-status}"
+    "$PY" - "$REGISTRY" "$id" "$act" <<'PYEOF'
+import json, sys
+sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parent / "core"))
+import config as C
+wid, act = sys.argv[2], sys.argv[3]
+path = C.REGISTRY_PATH
+reg = json.loads(path.read_text(encoding="utf-8"))
+wins = reg.get("windows", {})
+if wid not in wins:
+    print(f"没有这个窗口: {wid}（现有：{', '.join(wins)}）"); raise SystemExit(1)
+w = wins[wid]
+if act == "status":
+    b = C.window_bind(w)
+    print(f"窗口 {wid} 的监听：{b}" + ("（局域网直连：开）" if b == "0.0.0.0" else "（仅本机）"))
+    if b == "0.0.0.0":
+        print(f"  同网段访问：http://{C.lan_ip() or '<本机局域网IP>'}:{w['port']}{w['path']}")
+        print("  ⚠️ 局域网内可见（路径随机段=弱口令），且无 TLS；别在不可信网络开。")
+    raise SystemExit(0)
+if act == "on":
+    w["bind"] = "0.0.0.0"
+elif act == "off":
+    w.pop("bind", None)
+else:
+    print('用法: lighthouse.sh lan <窗口id> on|off|status'); raise SystemExit(1)
+path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+if act == "on":
+    print(f"✅ {wid} 已开「局域网直连」：同网段设备用 http://{C.lan_ip() or '<本机局域网IP>'}:{w['port']}{w['path']} 直连。")
+    print("   ⚠️ 局域网内可见、无 TLS：只在你信得过的网络开；用完 `lan " + wid + " off` 收回。")
+else:
+    print(f"🔒 {wid} 已关「局域网直连」——回到仅本机 127.0.0.1。")
+print("   ↻ 监听地址在启动时读取：`bash lighthouse.sh restart` 后生效。")
+PYEOF
+    ;;
+
+  json-response)
+    # 纯 JSON 回应（给不吃 SSE 的隧道/客户端；默认关，标准客户端两种都吃）
+    id="${2:?用法: lighthouse.sh json-response <窗口id> on|off|status}"; act="${3:-status}"
+    "$PY" - "$REGISTRY" "$id" "$act" <<'PYEOF'
+import json, sys
+sys.path.insert(0, str(__import__("pathlib").Path(sys.argv[1]).parent / "core"))
+import config as C
+wid, act = sys.argv[2], sys.argv[3]
+path = C.REGISTRY_PATH
+reg = json.loads(path.read_text(encoding="utf-8"))
+wins = reg.get("windows", {})
+if wid not in wins:
+    print(f"没有这个窗口: {wid}（现有：{', '.join(wins)}）"); raise SystemExit(1)
+w = wins[wid]
+if act == "status":
+    print(f"窗口 {wid} 的 POST 回应：{'纯 JSON（json_response 开）' if C.window_json_response(w) else 'SSE 帧（默认）'}")
+    raise SystemExit(0)
+if act == "on":
+    w["json_response"] = True
+elif act == "off":
+    w.pop("json_response", None)
+else:
+    print('用法: lighthouse.sh json-response <窗口id> on|off|status'); raise SystemExit(1)
+path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"{'✅ ' + wid + ' 已改「纯 JSON 回应」' if act == 'on' else '🔒 ' + wid + ' 已切回标准 SSE 回应'}")
+print("   ↻ 启动时读取：`bash lighthouse.sh restart` 后生效。")
 PYEOF
     ;;
 

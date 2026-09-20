@@ -827,14 +827,19 @@ if __name__ == "__main__":
     allowed = [h.strip() for h in os.environ.get("WINDOW_ALLOWED_HOSTS", "").split(",") if h.strip()]
     security = (TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed)
                 if allowed else TransportSecuritySettings(enable_dns_rebinding_protection=False))
+    bind = CONF.window_bind(WIN.cfg)             # 默认 127.0.0.1；用户可设 0.0.0.0（局域网直连）
+    jr = CONF.window_json_response(WIN.cfg)      # 纯 JSON 回应（给不吃 SSE 的隧道/客户端）
+    lan = CONF.lan_ip() if bind == "0.0.0.0" else ""
     print(f"[window:{WIN.id}] http://127.0.0.1:{WIN.port}{WIN.path} root={WIN.root} visibility={WIN.visibility}"
-          f" | rebinding-protection={'on:' + ','.join(allowed) if allowed else 'off'}", flush=True)
+          f" | bind={bind}" + (f" lan=http://{lan}:{WIN.port}{WIN.path}" if lan else "")
+          + (" | json_response=on" if jr else "")
+          + f" | rebinding-protection={'on:' + ','.join(allowed) if allowed else 'off'}", flush=True)
     # stateless_http=True：每个请求用独立传输，服务端不跟踪会话。
     # 为什么：会话模式下，服务一重启，所有客户端手里的 mcp-session-id 就作废了，
     # 而不少客户端（如 WorkBuddy）不会自动重新握手、继续拿旧会话 id 调用 → 服务端回
     # “Session not found” → 对方以为「找不到 mcp 环境」，白白排查半天。
     # 本窗口的工具都是请求-应答式，不用服务端推送，也不需要会话状态 —— 无状态模式
     # 让「重启服务」对已连接的客户端完全无感（旧会话 id 直接被忽略）。
-    server.run("streamable-http", host="127.0.0.1", port=WIN.port,
+    server.run("streamable-http", host=bind, port=WIN.port,
                streamable_http_path=WIN.path, transport_security=security,
-               stateless_http=True)
+               stateless_http=True, json_response=jr)

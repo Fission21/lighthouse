@@ -121,10 +121,8 @@ $ tail -5 ~/.lighthouse/audit/miji.jsonl          # 真实输出，时间戳与�
 > 命名隧道，对外入口只能是你 Cloudflare 账户下某个域名的子域——**这一步绕不过去**。
 > 这是 Cloudflare 的规则，不是灯塔的限制。已有域名的话，只是「挂到 Cloudflare → 建隧道 → 给子域加一条 DNS 记录」的事。
 
-还没有域名？三条免费替代（把隧道指向 `127.0.0.1:<窗口端口>` 即可，不用改灯塔代码，只是不走 `publish` 流水线）：
-**ngrok 免费版**（1 个固定 dev 域名，1GB/月）、**Tailscale Funnel**（所有套餐可用，固定 `<设备>.<tailnet>.ts.net`）、
-**trycloudflare 临时隧道**（不用域名，但 URL 每次重启就变，且官方**不支持 SSE**——MCP 的 streamable-http 要用事件流，
-只够本地冒烟，别拿它接连接器）。
+还没有域名？**不必买**：接本机 AI 完全不需要域名或隧道；接网页 AI 也有零成本路线（ngrok 免费版 / Tailscale Funnel），
+甚至可以直接用「本机 IP / 局域网 IP」连接。所有路数与优缺点，见下面的「**接入方式 · 任你选**」。
 
 网页 AI 那一侧还需要：ChatGPT 账号 + 打开开发者模式（设置 → 安全防护）。详见 [`docs/CHATGPT.md`](docs/CHATGPT.md)。
 
@@ -165,6 +163,35 @@ bash lighthouse.sh publish                    # 生成隧道配置 + 重启 + �
 之后在对话里 @ 一下这个连接器，或者直接问它「读一下 README，告诉我验证口令」——
 它会真去调工具，你这边审计日志能看到它读了什么。
 
+## 接入方式 · 任你选（不买域名也全能用）
+
+同一个窗口，给谁连、走哪条路，由你挑：
+
+| 想给谁看 | 怎么连 | 免费？ | 要域名？ |
+|---|---|---|---|
+| **本机 AI 客户端**（WorkBuddy / Codex / Claude Code…） | 默认就这样：`http://127.0.0.1:<端口>/<路径>` | ✅ | 不要 |
+| **同一网络里的设备**（手机、另一台电脑） | `bash lighthouse.sh lan <id> on` → 用 `http://<局域网IP>:<端口>/<路径>` 直连 | ✅ | 不要 |
+| **你自己的异地设备**（跨地域像在同一局域网） | Tailscale：私网 IP `http://100.x.y.z:<端口>/<路径>`，或 `tailscale funnel` 出公网 | ✅ | 不要 |
+| **网页版 / 手机版 ChatGPT** | **ngrok 免费版**（账户自带 1 个固定域名）或 **Tailscale Funnel**（`https://<设备>.<tailnet>.ts.net`） | ✅ | 不要 |
+| 同上、要最省心 | Cloudflare 命名隧道 + 自己域名（走 `publish` 流水线） | 域名钱（便宜域名即可） | 要 |
+
+几条要说清的：
+
+- **本机（默认）**：窗口只听 `127.0.0.1`，外面的机器摸不到——最安全的一档，什么都不用配。
+- **局域网直连**：`lan <id> on` 后窗口改听 `0.0.0.0`，同网段设备直接连 `http://192.168.x.x:<端口>/<路径>`。
+  ⚠️ 局域网内可见、没有 TLS（路径里的随机段就是那道弱口令）——只在信得过的网络开，用完 `lan <id> off` 收回。改动在 `restart` 后生效。
+- **ngrok 免费版**：注册即送 1 个固定 `xxx.ngrok-free.app` 域名；`ngrok http --domain=<你的免费域名> <窗口端口>`，
+  然后把这个 `https://…/<窗口路径>` 填进 ChatGPT 连接器。免费额度内个人自用足够。
+- **Tailscale**：装好后每台设备有 `100.x.y.z` 私网 IP——同一 tailnet 的设备直接 `http://100.x.y.z:<端口>/<路径>` 访问，
+  不需要域名、也不用把服务开给公网；要接网页 AI 再 `tailscale funnel <端口>`，得到 `https://<设备>.<tailnet>.ts.net` 的免费 HTTPS 地址。
+- **Cloudflare 快速隧道**（`cloudflared tunnel --url …`）：不用账号、不用域名，但 URL 每次重启都变、官方不支持 SSE——
+  本机实测里它连普通请求都路由不通（Cloudflare 边缘直接 404）。**不建议**拿它接 MCP。
+- **纯公网 IP 直连**：技术上行得通（公网 IP + 端口转发 + 自备证书），但国内宽带多为 NAT、不给公网 IP，
+  网页 AI 连接器又要求 HTTPS 主机名——**现实里只适合局域网/VPN 内的客户端**。
+- **对方不吃 SSE？** `json-response <id> on` 让窗口用纯 JSON 回应（标准客户端两种都吃，默认 SSE）。
+
+> 一句话：**接本机 AI 不需要域名；接网页 AI 也不一定买——本机 IP、局域网 IP、Tailscale、ngrok 全是零成本路线。**
+
 ## 日常命令
 
 ```bash
@@ -180,6 +207,8 @@ bash lighthouse.sh elevate <id> --for 30m --scope "src/**"   # 限时预授权�
 bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"] [--ttl 2h]   # 常驻策略：上限内申请立即生效（--ttl 限每次授予时长）
 bash lighthouse.sh auto-grant <id> off   # 回到逐次批准（下次申请立即生效，不用重启）
 bash lighthouse.sh chat-approval <id> on [--ceiling "src/**"]   # 对话内授权：你回一句「授权你」即生效（默认关）
+bash lighthouse.sh lan <id> on|off|status            # 局域网直连：同网段用「本机 IP:端口」访问（默认关）
+bash lighthouse.sh json-response <id> on|off|status  # POST 回应改纯 JSON（给不吃 SSE 的隧道/客户端；默认 SSE）
 bash lighthouse.sh deny <id>             # 收回全部提权
 bash lighthouse.sh test [id]             # 一键验收
 bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 / 配置
@@ -231,7 +260,7 @@ lighthouse/
 ├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
 ├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
-├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 56 / 加固 49）+ run_all_tests.sh
+├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 56 / 加固 55）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -289,7 +318,7 @@ lighthouse/
   **授权时长可自选**（`--for 30m|2h|1d|7d|forever`，`approve` / `elevate` / `auto-grant --ttl` 通用）；
   新增**对话内授权**（`chat-approval`：你回一句「授权你」即生效；默认关、信任式通道，仅限本机可信 agent）；服务端改用**无状态传输**（`stateless_http`），重启服务不再作废已连客户端的会话——
   不自动重连的客户端（如 WorkBuddy）不会再报「Session not found」；授予回执对 `dir/` 这类「只覆盖目录本身」的
-   pattern 当场提示改用 `dir/**`（不再假成功），`window_info` 补全工具清单，共 189 项。
+   pattern 当场提示改用 `dir/**`（不再假成功），`window_info` 补全工具清单；**接入方式任选**（`lan` 局域网 IP 直连 / `json-response` 纯 JSON 回应 / ngrok 与 Tailscale 免费路线），共 195 项。
   另修两处：CLI 与服务的注册表路径统一、`restart` 不再因 `$0` 相对路径失败。
 - **v1.1** —— 对话内提权（申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围 + 第 4 套测试（共 102 项）。
 - **v1.0** —— 首个开源版：四道闸、脱敏、审计、写开关两级锁、三套测试、多窗口路径分流、launchd/systemd 服务生成。

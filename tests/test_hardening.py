@@ -22,6 +22,7 @@
   ⑩ 公网入口只含 public 窗口（visibility=local 的必须被剔除）
   ⑪ `?` 单字符通配符：只吃一个字符、不跨 `/`；exclude 目录的**列举/检索**面不泄漏
   ⑫ 无状态模式：旧会话 id / 无会话 id 的裸 POST 不再被拒（服务重启对已连客户端无感）
+  ⑬ 接入方式选项：bind=0.0.0.0 局域网直连 / json_response 纯 JSON 回应 / 默认仅本机不外露
 
 用法: python3 test_hardening.py [--keep]
 """
@@ -60,6 +61,18 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _lan_ip() -> str:
+    """本机局域网 IP（取不到返回空串）。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.168.1.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return ""
 
 
 async def call(session, name: str, args: dict) -> dict:
@@ -374,6 +387,8 @@ async def main() -> int:
             srv5 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env5,
                                     stdout=open(tmp / "server5.log", "wb"), stderr=subprocess.STDOUT)
 
+            _noproxy = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
             def raw_call(body: dict, sid: str | None = None) -> tuple:
                 hdrs = {"Content-Type": "application/json",
                         "Accept": "application/json, text/event-stream"}
@@ -382,7 +397,7 @@ async def main() -> int:
                 req = urllib.request.Request(f"http://127.0.0.1:{port5}/w-hard5",
                                              data=json.dumps(body).encode(), headers=hdrs, method="POST")
                 try:
-                    with urllib.request.urlopen(req, timeout=10) as resp:
+                    with _noproxy.open(req, timeout=10) as resp:
                         return resp.status, resp.read().decode("utf-8", "replace")
                 except urllib.error.HTTPError as e:
                     return e.code, e.read().decode("utf-8", "replace")
@@ -393,6 +408,15 @@ async def main() -> int:
                         if s_.connect_ex(("127.0.0.1", port5)) == 0:
                             break
                     time.sleep(0.5)
+                log5 = (tmp / "server5.log").read_text(encoding="utf-8", errors="replace")
+                check("默认窗口只绑本机（启动日志 bind=127.0.0.1）", "bind=127.0.0.1" in log5,
+                      (log5.splitlines()[-1][:90] if log5 else ""))
+                _lip = _lan_ip()
+                if _lip:
+                    _c = socket.socket(); _c.settimeout(2)
+                    _refused = _c.connect_ex((_lip, port5)) != 0
+                    _c.close()
+                    check(f"默认 bind：局域网 IP（{_lip}）连不上（不外露）", _refused)
                 body_req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                             "params": {"name": "window_info", "arguments": {}}}
                 st, body = raw_call(body_req)
@@ -405,6 +429,68 @@ async def main() -> int:
                     srv5.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     srv5.kill()
+
+            print("\n⑬ 接入方式选项：局域网直连（bind=0.0.0.0）与纯 JSON 回应（json_response）")
+            # 给「不想买域名/不想开隧道」的用户：同网段设备用 IP 直连；不吃 SSE 的隧道用 JSON 回应。
+            port6 = free_port()
+            reg = json.loads(registry.read_text(encoding="utf-8"))
+            reg["windows"]["hard6"] = {
+                "title": "局域网窗", "root": str(root),
+                "include": ["**/*.md"], "exclude": [], "deny_extra": [],
+                "port": port6, "path": "/w-hard6", "visibility": "local",
+                "write": {"enabled": False}, "bind": "0.0.0.0", "json_response": True,
+            }
+            registry.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            env6 = {**env, "WINDOW_ID": "hard6", "WINDOW_PORT": str(port6), "WINDOW_PATH": "/w-hard6"}
+            srv6 = subprocess.Popen([PY, str(REPO / "core" / "server.py")], env=env6,
+                                    stdout=open(tmp / "server6.log", "wb"), stderr=subprocess.STDOUT)
+
+            _noproxy6 = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+            def raw6(msg: dict, host: str = "127.0.0.1"):
+                req = urllib.request.Request(
+                    f"http://{host}:{port6}/w-hard6", data=json.dumps(msg).encode(),
+                    headers={"Content-Type": "application/json",
+                             "Accept": "application/json, text/event-stream"}, method="POST")
+                try:
+                    with _noproxy6.open(req, timeout=10) as resp:
+                        return resp.status, resp.read().decode("utf-8", "replace")
+                except urllib.error.HTTPError as e:
+                    return e.code, e.read().decode("utf-8", "replace")
+
+            try:
+                for _ in range(40):
+                    with socket.socket() as s_:
+                        if s_.connect_ex(("127.0.0.1", port6)) == 0:
+                            break
+                    time.sleep(0.5)
+                log6 = (tmp / "server6.log").read_text(encoding="utf-8", errors="replace")
+                check("bind=0.0.0.0 真的绑全网卡（启动日志可查）", "bind=0.0.0.0" in log6,
+                      (log6.splitlines()[-1][:90] if log6 else ""))
+                _lip6 = _lan_ip()
+                if _lip6:
+                    st6, body6 = raw6({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                       "params": {"name": "window_info", "arguments": {}}}, host=_lip6)
+                    check(f"局域网 IP（{_lip6}）可直接访问", st6 == 200 and "hard6" in body6,
+                          f"{st6} {body6[:60]}")
+                msg6 = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {"name": "window_info", "arguments": {}}}
+                req6 = urllib.request.Request(
+                    f"http://127.0.0.1:{port6}/w-hard6", data=json.dumps(msg6).encode(),
+                    headers={"Content-Type": "application/json",
+                             "Accept": "application/json, text/event-stream"}, method="POST")
+                with _noproxy6.open(req6, timeout=10) as resp:
+                    ctype6 = resp.headers.get("content-type", "")
+                    body6b = resp.read().decode("utf-8", "replace")
+                check("json_response=on → 回应是 application/json（不再是 SSE 帧）",
+                      "application/json" in ctype6, ctype6)
+                check("纯 JSON 回应里带得回真实结果", "hard6" in body6b, body6b[:60])
+            finally:
+                srv6.terminate()
+                try:
+                    srv6.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    srv6.kill()
 
     finally:
         srv.terminate()
