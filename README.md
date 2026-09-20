@@ -2,8 +2,9 @@
 
 # 灯塔 · Lighthouse
 
-**Filesystem MCP gives an AI access. Lighthouse governs that access.**
-**给 AI 开门之前，先把锁、记录和审批装上。**
+**把电脑上的一个目录，开成一扇 AI 能安全访问的「窗」。**
+
+<small>Filesystem MCP gives an AI access. Lighthouse governs that access. · 给 AI 开门之前，先把锁、记录和审批装上。</small>
 
 四道闸 · 出口脱敏 · 全程审计 · 写开关（默认全只读）· 提权要你点头 · 开窗先问你范围
 
@@ -14,6 +15,17 @@
 </div>
 
 ---
+
+## 这是什么
+
+**一句话：给 AI 开一扇「窗」—— 它看得见什么、能不能动手、什么时候看的，全由你说了算。**
+
+- **给谁用** —— 想在网页版 ChatGPT（或本机 AI 助手）里看自己项目、又不想把整台机器交出去的人。
+- **怎么用** —— 本机一条命令开窗 → 把地址接进 ChatGPT 连接器（或 WorkBuddy / Codex 这类本机客户端）→ 它就能读了。
+- **窗多大你定** —— 只给看 `docs/**`？能不能写？写完要不要留备份？密钥类文件（`.env`、私钥…）默认永远不给看。
+- **全程留痕** —— 它读了什么、什么时候读的、被拒了什么，逐条进审计；它想扩大范围，得先问你点头。
+
+它和普通 filesystem MCP 的关系：**filesystem MCP 给 AI「访问权」，灯塔给这份访问权装上闸门** —— 为什么需要，从下面的「先说问题」看起。
 
 ## 先说问题
 

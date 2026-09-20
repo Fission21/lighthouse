@@ -2,8 +2,9 @@
 
 # Lighthouse · 灯塔
 
-**Filesystem MCP gives an AI access. Lighthouse governs that access.**
-**Before you open the door for an AI, put locks, logs and an approval step on it.**
+**Turn a folder on your computer into a window an AI can safely look through.**
+
+<small>Filesystem MCP gives an AI access. Lighthouse governs that access. · Before you open the door for an AI, put locks, logs and an approval step on it.</small>
 
 Four gates · egress redaction · full audit log · write switch (read-only by default) · elevation is yours to grant, per request or by a standing policy you set · scope is asked, never assumed
 
@@ -14,6 +15,17 @@ Four gates · egress redaction · full audit log · write switch (read-only by d
 </div>
 
 ---
+
+## What is this?
+
+**In one line: open a "window" for an AI — what it can see, whether it can touch anything, and when it looked are all yours to decide.**
+
+- **Who it's for** — anyone who wants the ChatGPT web app (or a local AI agent) to read their project without handing over the whole machine.
+- **How you use it** — open a window with one command locally, then point a ChatGPT connector (or a local client such as WorkBuddy / Codex) at its URL.
+- **You draw the window** — only `docs/**`? Read-only? Keep a backup on every write? Secrets (`.env`, private keys, …) are denied by default, always.
+- **Everything is on the record** — what it read, when, and what was refused goes to the audit log; widening the scope means asking you first.
+
+How it relates to a plain filesystem MCP: **a filesystem MCP gives an AI access — Lighthouse puts gates on that access** (the "The problem" section below explains why that matters).
 
 ## The problem
 
