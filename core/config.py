@@ -105,6 +105,15 @@ def window_auto_grant_ttl(cfg: dict) -> int | None:
     return None
 
 
+def window_chat_approval(cfg: dict) -> bool:
+    """窗口是否开启「对话内授权」：用户在对话里明确同意后，agent 可带 user_confirmed=true 完成授权。
+
+    缺省 **False**（fail-closed）。⚠️ 这是**信任式**通道：服务端无法验证「用户真说了同意」，
+    它信任的是 agent 的转述 —— 只对该窗口的**本机/可信 agent** 有意义；网页 AI 窗口不要开。
+    """
+    return cfg.get("chat_approval") is True
+
+
 def auto_grant_policy(cfg: dict) -> tuple[bool, list[str]]:
     """(是否自动授予, 上限)。
 

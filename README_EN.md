@@ -133,7 +133,7 @@ pip install mcp
 
 # 1) Spin up the sample window and verify the whole chain (no internet needed)
 bash lighthouse.sh test            # temp instance → five suites → auto cleanup
-#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 42/42   ✅ hardening 47/47
+#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 51/51   ✅ hardening 47/47
 
 # 2) Open a window onto YOUR project
 #    Without a scope it will ASK you how much to expose — it never defaults to "everything"
@@ -176,6 +176,7 @@ bash lighthouse.sh approve <id> [--for 2h]   # approve its elevation request (--
 bash lighthouse.sh elevate <id> --for 30m --scope "src/**"   # pre-arm: auto-approve such requests while it lasts
 bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"]   # standing policy: requests inside the bound take effect at once
 bash lighthouse.sh auto-grant <id> off   # back to ask-first (applies to the very next request, no restart)
+bash lighthouse.sh chat-approval <id> on [--ceiling "src/**"]   # in-chat approval: you say "I authorize it" and it takes effect (off by default)
 bash lighthouse.sh deny <id>             # revoke every elevation at once
 bash lighthouse.sh test [id]             # the five suites
 bash lighthouse.sh doctor                # interpreter / deps / tunnel / config check
@@ -216,6 +217,9 @@ Key points:
   what was requested), or pre-arm a window (`elevate <id> --for 30m --scope "src/**"` — expires on its own);
 - **Revoke anytime**: `deny <id>` clears everything (extra scope + pending request + elevation window);
   `auto-grant <id> off` drops the standing policy.
+- **In-chat approval (opt-in)**: with `chat-approval <id> on`, the agent asks, you answer "yes, authorize it" in the
+  conversation, and it re-requests with `user_confirmed=true` to take effect — no terminal needed. Trust-based
+  (the server cannot verify what you actually said), off by default, meant for local/trusted agents only.
 
 That is how “the choice stays with the owner” is implemented: **as open or as tight as you decide — the gates stay in your hand.**
 
@@ -228,7 +232,7 @@ lighthouse/
 ├── windows.json         # window registry: the visible scope of every window lives here
 ├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
-├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 42 / hardening 47) + run_all_tests.sh
+├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 51 / hardening 47) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -287,7 +291,8 @@ nothing but a pile of local scripts.
   found real bypasses (case-insensitive deny matching, the whole `.git/` directory, more key-name variants);
   5th test suite (hardening). Also: CLI and server now resolve the same registry file, and
   `restart` no longer fails when `$0` is a relative path. Grant durations are user-selectable
-  (`--for 30m|2h|1d|7d|forever`; `auto-grant --ttl` makes each auto-grant expire) — 173 checks total.
+  (`--for 30m|2h|1d|7d|forever`; `auto-grant --ttl` makes each auto-grant expire). New: in-chat approval
+  (`chat-approval` — the user says "I authorize it" in the conversation; opt-in, trust-based, local agents only) — 182 checks total.
 - **v1.1** — in-chat elevation (request-only + `approve` / `elevate` / `deny` / `scope`) · scope is asked at
   window-creation time (never silently defaults to `**/*`) · 4th test suite (102 checks total).
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,

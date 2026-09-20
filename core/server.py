@@ -292,6 +292,7 @@ class Window:
                 "auto_grant": _auto,
                 "auto_grant_ceiling": ((_ceiling or "不限（任何范围申请都会自动生效）") if _auto else None),
                 "auto_grant_ttl": (SCOPE.describe_duration(_ttl) if _auto else None),
+                "chat_approval": CONF.window_chat_approval(_live_cfg() or self.cfg),
                 "how_to_ask": (
                     "需要看更多时，让 agent 调 request_access(reason, include) 提出申请——"
                     "它只能申请，批准权在用户手里。用户在部署机器上批准：`lighthouse.sh approve <窗口>`；"
@@ -566,9 +567,10 @@ def _validate_patterns(include: list[str]) -> tuple[list[str], str]:
 
 @server.tool(description="【申请】申请扩大本窗口的给看范围（例如从「只能看文档」提到「也能看代码」）。"
                          "默认只会记成【待批准申请】——agent 无法自我提权，批准权在用户手里；"
-                         "若用户为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效。"
+                         "若用户为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效；"
+                         "若用户在对话里已明确同意、且窗口开了「对话内授权」，带 user_confirmed=true 再次申请即生效。"
                          "密钥默认拉黑与 exclude 永远不受影响。")
-def request_access(include: list[str], reason: str = "") -> str:
+def request_access(include: list[str], reason: str = "", user_confirmed: bool = False) -> str:
     clean, bad = _validate_patterns(include)
     if bad:
         _audit("request_access", {"include": include, "reason": reason}, False, {"reason": bad})
@@ -617,16 +619,55 @@ def request_access(include: list[str], reason: str = "") -> str:
             })
         why = why_c
 
+    # 对话内授权（用户声明制）：窗口开了 chat_approval，且用户在对话里明确同意后，
+    # agent 带 user_confirmed=true 再次申请 → 立即生效（全程不用在部署机跑命令）。
+    # ⚠️ 服务端验证不了「用户真说了」——它信任 agent 的转述；所以默认关、只该对本机/可信 agent 开。
+    if user_confirmed:
+        cfg_now = _live_cfg() or WIN.cfg
+        if CONF.window_chat_approval(cfg_now):
+            ceil_c = CONF.window_ceiling(cfg_now)
+            ok_c, why_c = SCOPE.ceiling_allows(ceil_c, clean)
+            if ok_c:
+                ttl = WIN.auto_grant_ttl()
+                g = SCOPE.set_grant(WIN.id, clean, ttl,
+                                    note=(f"对话内授权（agent 转述用户已在对话中明确同意，时长 "
+                                          f"{SCOPE.describe_duration(ttl)}）：{reason}")[:200],
+                                    by="chat-approval")
+                _audit("request_access", {"include": clean, "reason": reason, "user_confirmed": True}, True,
+                       {"granted": g["include"], "via": "chat-approval", "ttl_minutes": ttl})
+                return _dump({
+                    "status": "granted",
+                    "via": "chat-approval",
+                    "window": WIN.id,
+                    "now_visible": clean,
+                    "ceiling": ceil_c or "不限",
+                    "duration": SCOPE.describe_duration(ttl),
+                    "until": g["until"],
+                    "message": (f"已按「对话内授权」生效（用户在对话中已明确同意），时长 "
+                                f"{SCOPE.describe_duration(ttl)}"
+                                + ("（到期自动收回）。" if ttl else "（无期限，直到被收回）。")
+                                + "密钥默认拉黑与 exclude 照旧生效。"),
+                    "note": "该通道信任 agent 的转述；若不是用户本意，用户可 deny 立即收回，或关掉该窗口的 chat_approval。",
+                })
+            why = why_c
+        else:
+            why = "本窗口未开启「对话内授权」（user_confirmed 需要用户先在部署机开启该策略）"
+
     pending = SCOPE.set_pending(WIN.id, clean, reason)
     _audit("request_access", {"include": clean, "reason": reason}, True, {"pending": True, "note": why})
+    chat_hint = ("\n（本窗口已开启「对话内授权」：用户若已在对话里明确同意，可再次调用 "
+                 "request_access(include=..., reason=..., user_confirmed=true) 即时生效）"
+                 if CONF.window_chat_approval(_live_cfg() or WIN.cfg) else "")
     return _dump({
         "status": "pending",
         "window": WIN.id,
         "requested": clean,
         "reason": reason,
+        "user_confirmed_seen": bool(user_confirmed),
         "message": ("申请已记录，等用户批准。请把下面这句话原样转达给用户：\n"
                     f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
                     "（想一次给一段时间就加 `--for 2h`；可用 30m / 2h / 1d / 7d / forever，不写 = 无期限）"
+                    + chat_hint
                     + (f"\n（预授权检查：{why}）" if arm is not None else "")),
         "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要用户亲自批准，不会自动生效。"
                  if auto else "agent 无法自我提权：没有用户的批准，这个申请不会改变任何可见范围。"),

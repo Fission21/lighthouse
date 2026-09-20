@@ -16,6 +16,9 @@
      关闭后立即回到 pending；上限配置可疑时 fail-closed；拉黑始终压过自动授予
   ⑨ 时长可自选（30m / 2h / 1d / forever）：解析不吞错；approve --for 30m 真的落成
      30 分钟有效期；auto-grant --ttl 2h 让每次自动授予带 2 小时到期
+  ⑩ 对话内授权（chat_approval）：默认关时 user_confirmed 也落待批（fail-closed）；
+     开启后用户在对话里同意 → agent 带 user_confirmed=true 即生效；带 ceiling 上限约束；
+     关掉后立即回到待批
 
 用法: python3 test_elevate.py [--keep]
 """
@@ -249,6 +252,44 @@ async def main() -> int:
                 until = data["elev"]["grant"].get("until")
                 left = None if until is None else int(until - time.time())
                 check("auto-grant 的授权真的落在 ≈2 小时", left is not None and abs(left - 7200) < 150, f"剩 {left}s")
+
+                print("\n⑩ 对话内授权：用户在对话里说「授权你」即生效（默认关，fail-closed）")
+                cli("deny", "elev", env=env)
+                cli("auto-grant", "elev", "off", env=env)
+                rg = json.loads(registry.read_text(encoding="utf-8"))
+                rg["windows"]["elev"].pop("auto_grant", None)
+                rg["windows"]["elev"].pop("elevation_ceiling", None)
+                registry.write_text(json.dumps(rg, ensure_ascii=False, indent=2), encoding="utf-8")
+                c10 = await call(session, "request_access",
+                                 {"include": ["code/**"], "reason": "用户说授权了", "user_confirmed": True})
+                check("未开策略时 user_confirmed 也落待批（fail-closed）", c10.get("status") == "pending",
+                      json.dumps(c10, ensure_ascii=False)[:80])
+                out = cli("chat-approval", "elev", "on", env=env)
+                check("CLI chat-approval on 成功", "对话内授权" in out, out.replace("\n", " ")[:90] if out else "")
+                cli("deny", "elev", env=env)
+                c11 = await call(session, "request_access",
+                                 {"include": ["code/**"], "reason": "用户刚才明确同意了", "user_confirmed": True})
+                check("开启后 user_confirmed=true 立即生效（via chat-approval）",
+                      c11.get("status") == "granted" and c11.get("via") == "chat-approval",
+                      json.dumps(c11, ensure_ascii=False)[:90])
+                c12 = await call(session, "read_file", {"path": "code/app.py"})
+                check("对话内授权后代码可读", bool(c12.get("content")))
+                info3 = await call(session, "window_info", {})
+                check("window_info 暴露对话内授权开关", info3.get("scope_elevation", {}).get("chat_approval") is True)
+                out = cli("chat-approval", "elev", "off", env=env)
+                check("CLI chat-approval off 成功", "已关闭" in out, out.replace("\n", " ")[:80] if out else "")
+                cli("deny", "elev", env=env)
+                c13 = await call(session, "request_access",
+                                 {"include": ["code/**"], "reason": "关掉之后", "user_confirmed": True})
+                check("关掉后立即回到待批（不重启也生效）", c13.get("status") == "pending",
+                      json.dumps(c13, ensure_ascii=False)[:80])
+                out = cli("chat-approval", "elev", "on", "--ceiling", "code/**", env=env)
+                check("CLI chat-approval on --ceiling 成功", "对话内授权" in out, out.replace("\n", " ")[:80] if out else "")
+                cli("deny", "elev", env=env)
+                c14 = await call(session, "request_access",
+                                 {"include": ["**/*"], "reason": "超出上限", "user_confirmed": True})
+                check("超出上限的 user_confirmed 仍转待批", c14.get("status") == "pending",
+                      json.dumps(c14, ensure_ascii=False)[:80])
 
     finally:
         srv.terminate()

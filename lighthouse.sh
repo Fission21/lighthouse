@@ -19,6 +19,9 @@
 #                                           批准 agent 的范围申请；--for 选授权时长
 #   时长写法（approve / elevate / auto-grant --ttl 通用）：30m / 2h / 1d / 7d / 1w / forever
 #                                           （纯数字 = 分钟；不写 = 无期限，用 deny 收回）
+#   chat-approval <id> on [--ceiling "src/**,docs/**"] | off | status
+#                                           对话内授权：用户在对话里说「授权你」即生效，不用在部署机跑命令
+#                                           （信任式通道：只给本机/可信 agent 开，网页 AI 窗口不要开）
 #   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
 #   scope <id>                              看当前授权状态（含常驻策略）
 #   issue "标题" [--area 模块] [--sev 高|中|低] [--detail "现象"]
@@ -392,6 +395,66 @@ print(f"   常驻上限：{ceiling or '不限（任何范围申请都会自动�
 print(f"   授权时长：{S.describe_duration(ttl_min)}（每次自动授予保持这么久，到期自动收回；可换 --ttl 30m|2h|1d|7d|forever）")
 print("   之后 agent 在对话里申请 → 直接生效，不用再跑本地命令。")
 print(f"   ⚠️ 密钥默认拉黑与 exclude 仍然压过一切；想马上收紧：bash lighthouse.sh auto-grant {wid} off")
+PYEOF
+    ;;
+
+  chat-approval)
+    # 对话内授权（默认关）：开了之后，用户在对话里明确同意 → agent 带 user_confirmed=true 再次申请即生效
+    shift
+    id="${1:?用法: lighthouse.sh chat-approval <窗口id> on|off|status [--ceiling \"src/**,docs/**\"]}"; shift || true
+    act="${1:-status}"; shift || true
+    ceiling=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --ceiling) ceiling="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    "$PY" - "$CORE" "$id" "$act" "$ceiling" <<'PYEOF'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import config as C
+wid, act, ceiling = sys.argv[2], sys.argv[3], sys.argv[4]
+path = C.REGISTRY_PATH
+reg = json.loads(path.read_text(encoding="utf-8"))
+wins = reg.get("windows", {})
+if wid not in wins:
+    print(f"没有这个窗口: {wid}（现有：{', '.join(wins)}）")
+    raise SystemExit(1)
+w = wins[wid]
+
+if act == "status":
+    on = C.window_chat_approval(w)
+    print(f"窗口 {wid} 的「对话内授权」：{'开' if on else '关（默认）'}")
+    if on:
+        print(f"  上限       : {', '.join(C.window_ceiling(w)) or '不限'}")
+        print("  ⚠️ 信任式通道：服务端验证不了用户是否真说了同意 —— 只对本机/可信 agent 开。")
+    raise SystemExit(0)
+
+if act == "off":
+    w.pop("chat_approval", None)
+    path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"🔒 已关闭 {wid} 的「对话内授权」：带 user_confirmed 的申请也会落回待批。")
+    print(f"   （已授予的范围不会自动收回；要一并收回：bash lighthouse.sh deny {wid}）")
+    raise SystemExit(0)
+
+if act != "on":
+    print('用法: lighthouse.sh chat-approval <窗口id> on|off|status [--ceiling "src/**,docs/**"]')
+    raise SystemExit(1)
+
+w["chat_approval"] = True
+if ceiling:
+    pats = [x.strip() for x in ceiling.split(",") if x.strip()]
+    bad = [p for p in pats if p.startswith("/") or ".." in p or len(p) > 200]
+    if bad or not pats:
+        print(f"❌ 上限写法不合法: {bad or '空'}（只接受相对 glob，例如 src/** 、docs/**）")
+        raise SystemExit(1)
+    w["elevation_ceiling"] = pats
+path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"✅ 已为 {wid} 开启「对话内授权」")
+print(f"   上限：{ceiling or '不限（拉黑/exclude 照旧压过一切）'}")
+print("   流程：agent 申请 → 你回一句「授权你」→ 它带 user_confirmed=true 再申请 → 即时生效（不用跑命令）")
+print(f"   想收紧：bash lighthouse.sh chat-approval {wid} off（或 deny 立即收回）")
 PYEOF
     ;;
 

@@ -92,6 +92,8 @@ bash lighthouse.sh url myproj --public     # 打印 https://<域名>/<窗口路�
 <miji> 窗口的权限不要动，除非我说。如果对话里的 AI 申请扩大范围：
 - 默认它会落成【待批准】，需要我本地跑 approve —— 这是设计，不是 bug
 - 我在本地可以用 elevate（限时）或 auto-grant（常驻策略，可带 --ttl 限授权时长）；时长由我挑（--for 2h / 1d / forever）。你只负责转达，别替我做决定
+- 若这扇窗开了「对话内授权」（我的明确策略声明）：我在对话里回你一句「授权你」之后，你可以带
+  user_confirmed=true 再申请一次、即时生效——不用等我跑命令。**我不说，就不算**；这条只对本机 agent 有意义
 - 密钥/凭据/.git 永远读不到，任何提权都压不过
 ```
 
@@ -100,7 +102,7 @@ bash lighthouse.sh url myproj --public     # 打印 https://<域名>/<窗口路�
 ```text
 改 ~/demo/lighthouse 之前先读 AGENTS.md 的五条铁律（fail-closed、默认拉黑不可关、
 写权限两级锁、提权默认需你批准、开窗必须先问范围），改完必须：
-bash tests/run_all_tests.sh     # 五套（13/46/25/42/47）必须全绿
+bash tests/run_all_tests.sh     # 五套（13/46/25/51/47）必须全绿
 任何安全相关改动都要补一条测试。改完汇报：改了什么、测试结果、有没有破坏既有行为。
 ```
 
