@@ -38,6 +38,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
   但改 `core/*.py` 的**代码**必须 `bash lighthouse.sh restart` 才生效（服务是长驻进程）。
 - **本机私有配置优先**：`config.local.json` / `windows.local.json`（已 gitignore）存在时优先于
   仓库里的示例 `config.json` / `windows.json`；**不要把它们提交进版本库**。
+  `config.local.json` 里另有 `relay` 段（公网 IP 直连：`host`/`port`/`key`，由 `lighthouse.sh relay` 维护）。
 - **相对路径按仓库根解析**（`core/config.py:window_root`）；不要用进程 CWD 拼路径。
 - **状态目录优先级**：环境变量 `LIGHTHOUSE_STATE` > 配置文件的 `state_dir` > `~/.lighthouse`
   （`core/server.py` 与 `core/scope.py` 用同一套逻辑，改一处要同步）。
@@ -48,7 +49,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 ## 改完必须做的验证
 
 ```bash
-bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开关 25 / 提权 56 / 加固 55，必须全绿
+bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开关 25 / 提权 56 / 加固 56，必须全绿
 ```
 
 任何安全相关的改动（闸门、脱敏、写路径、提权）都要补一条测试——测试套件是这个项目的安全承诺书。

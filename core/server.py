@@ -840,6 +840,31 @@ if __name__ == "__main__":
     # “Session not found” → 对方以为「找不到 mcp 环境」，白白排查半天。
     # 本窗口的工具都是请求-应答式，不用服务端推送，也不需要会话状态 —— 无状态模式
     # 让「重启服务」对已连接的客户端完全无感（旧会话 id 直接被忽略）。
-    server.run("streamable-http", host=bind, port=WIN.port,
-               streamable_http_path=WIN.path, transport_security=security,
-               stateless_http=True, json_response=jr)
+    app = server.streamable_http_app(streamable_http_path=WIN.path, json_response=jr,
+                                     stateless_http=True, transport_security=security, host=bind)
+
+    landing = (f"✅ 灯塔窗口「{WIN.id}」在运行 —— 这里是给 AI 客户端用的 MCP 接口，浏览器里没有页面可看。\n"
+               f"你看到这段话 = 这台机器已经连通、服务正常。\n"
+               f"客户端连接地址: http://<主机地址>:{WIN.port}{WIN.path}（本机用 127.0.0.1，局域网用你的内网 IP）\n")
+
+    class _BrowserLanding:
+        """浏览器直接访问窗口地址时回一句人话；MCP 客户端（带 text/event-stream 的）请求原样放行。"""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") == "http" and scope.get("method") in ("GET", "HEAD"):
+                hdrs = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
+                acc, ua = hdrs.get("accept", ""), hdrs.get("user-agent", "")
+                if "text/event-stream" not in acc and ("text/html" in acc or "Mozilla" in ua):
+                    body = landing.encode()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                            (b"content-length", str(len(body)).encode())]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+            await self.inner(scope, receive, send)
+
+    import uvicorn
+    uvicorn.run(_BrowserLanding(app), host=bind, port=WIN.port)

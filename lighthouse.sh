@@ -13,6 +13,8 @@
 #   write <id> on [分钟] | off | status    写开关（默认全只读）
 #   lan <id> on|off|status            局域网直连：同网段设备用「本机 IP:端口」访问（不用域名/隧道）
 #   json-response <id> on|off|status  POST 回应改纯 JSON（给不吃 SSE 的隧道/客户端；默认 SSE 帧）
+#   relay <id> on [--host user@ip] [--port N] [--key ~/.ssh/x] | off | status
+#                                           公网 IP 直连：ssh -R 反向隧道挂到你的服务器 IP:端口（不用域名）
 #   elevate <id> [分钟|--for 2h] [--scope "src/**"]
 #                                           预授权窗口：期间 agent 的范围申请在上限内自动批
 #   auto-grant <id> on [--ceiling "src/**,docs/**"] [--ttl 2h|forever] | off | status
@@ -541,6 +543,145 @@ else:
 path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(f"{'✅ ' + wid + ' 已改「纯 JSON 回应」' if act == 'on' else '🔒 ' + wid + ' 已切回标准 SSE 回应'}")
 print("   ↻ 启动时读取：`bash lighthouse.sh restart` 后生效。")
+PYEOF
+    ;;
+
+  relay)
+    # 用你自己的公网服务器(IP)直连本机窗口 —— 不用域名、不用隧道服务商。
+    # 原理：ssh -R 反向隧道，把「服务器IP:端口」转发到本机窗口端口；断线自动重连。
+    id="${2:?用法: lighthouse.sh relay <窗口id> on [--host user@ip] [--port N] [--key ~/.ssh/xxx] | off | status}"
+    act="${3:-status}"; shift 3 2>/dev/null || true
+    host=""; rport=""; keyf=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --host) host="$2"; shift 2 ;;
+        --port) rport="$2"; shift 2 ;;
+        --key)  keyf="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    "$PY" - "$CORE" "$id" "$act" "$host" "$rport" "$keyf" <<'PYEOF'
+import json, os, signal, socket, subprocess, sys, time
+import urllib.request
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import config as C
+
+wid, act, host, rport, keyf = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+wins = C.windows(include_disabled=True)
+if wid not in wins:
+    print(f"没有这个窗口: {wid}（现有：{', '.join(wins)}）"); raise SystemExit(1)
+w = wins[wid]
+sd = C.state_dir()
+(sd / "state").mkdir(parents=True, exist_ok=True)
+(sd / "logs").mkdir(parents=True, exist_ok=True)
+pidf = sd / "state" / f"relay-{wid}.pid"
+logf = sd / "logs" / f"relay-{wid}.log"
+cfgpath = Path(sys.argv[1]).parent / "config.local.json"
+
+def load_relay() -> dict:
+    try:
+        d = json.loads(cfgpath.read_text(encoding="utf-8"))
+    except Exception:
+        d = {}
+    return d.get("relay") or {}
+
+def save_relay(host_v: str, port_v: int, key_v: str) -> None:
+    d = json.loads(cfgpath.read_text(encoding="utf-8")) if cfgpath.exists() else {}
+    d["relay"] = {"host": host_v, "port": port_v, "key": key_v,
+                  "_comment": "公网服务器（IP 直连档）：ssh -R 反向隧道；改这个文件不进版本库"}
+    cfgpath.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0); return True
+    except (OSError, ProcessLookupError):
+        return False
+
+def read_pid():
+    try:
+        return int(pidf.read_text().strip())
+    except Exception:
+        return None
+
+def stop_tunnel() -> None:
+    pid = read_pid()
+    if pid and alive(pid):
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        time.sleep(0.8)
+    pidf.unlink(missing_ok=True)
+
+if act == "status":
+    pid = read_pid()
+    r = load_relay()
+    if not r.get("host"):
+        print("relay 未配置。示例：bash lighthouse.sh relay " + wid + " on --host root@1.2.3.4 --port 18888 --key ~/.ssh/id_ed25519")
+        raise SystemExit(0)
+    url = f"http://{r['host'].split('@')[-1]}:{r['port']}{w['path']}"
+    okr = ""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with op.open(req, timeout=6) as resp:
+            okr = f"可达（HTTP {resp.status}）"
+    except Exception as e:
+        okr = f"暂不可达（{str(e)[:60]}）"
+    print(f"relay（{wid}）：{'运行中' if (pid and alive(pid)) else '未运行'}"
+          + (f"，pid={pid}" if pid else ""))
+    print(f"  公网地址：{url}   {okr}")
+    print(f"  服务器：{r['host']}  端口：{r['port']}  日志：{logf}")
+    raise SystemExit(0)
+
+if act == "off":
+    stop_tunnel()
+    print(f"🔒 已关 {wid} 的 relay 隧道（服务器那头的监听会随之消失）。")
+    raise SystemExit(0)
+
+if act != "on":
+    print("用法: lighthouse.sh relay <窗口id> on [--host user@ip] [--port N] [--key ~/.ssh/xxx] | off | status")
+    raise SystemExit(1)
+
+r = load_relay()
+host = host or r.get("host") or ""
+rport = int(rport) if rport else int(r.get("port") or 18888)
+keyf = keyf or r.get("key") or ""
+if not host:
+    print("还没有配置过服务器。给一次就记住（存进 config.local.json，不进版本库）：")
+    print(f"  bash lighthouse.sh relay {wid} on --host root@<你的服务器IP> --port 18888 --key ~/.ssh/<你的私钥>")
+    raise SystemExit(1)
+save_relay(host, rport, keyf)
+
+stop_tunnel()   # 先收旧进程（含端口占用的）
+key_opt = f"-i {os.path.expanduser(keyf)} " if keyf else ""
+ssh_cmd = (f"ssh {key_opt}-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 "
+           f"-o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -N "
+           f"-R 0.0.0.0:{rport}:127.0.0.1:{w['port']} {host}")
+loop = f"while :; do {ssh_cmd}; sleep 5; done"
+with open(logf, "ab") as lf:
+    proc = subprocess.Popen(["/bin/bash", "-c", loop], stdout=lf, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+pidf.write_text(str(proc.pid))
+ip = host.split("@")[-1]
+url = f"http://{ip}:{rport}{w['path']}"
+okr = ""
+for _ in range(4):
+    time.sleep(2.5)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with op.open(req, timeout=6) as resp:
+            okr = f"✅ 公网可达（HTTP {resp.status}）"; break
+    except Exception as e:
+        okr = f"⏳ 暂未连通（{str(e)[:50]}）"
+print(f"{'✅' if okr.startswith('✅') else '⚠️'} {wid} 的 relay 已启动（pid={proc.pid}，断线自动重连）")
+print(f"   公网地址：{url}   {okr}")
+if not okr.startswith("✅"):
+    print("   排查：服务器 sshd 需 GatewayPorts clientspecified（或 yes）；端口别被防火墙拦；--key 是否正确。")
+    print(f"   日志：{logf}")
+print("   关闭：bash lighthouse.sh relay " + wid + " off")
 PYEOF
     ;;
 

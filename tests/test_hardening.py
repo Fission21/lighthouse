@@ -485,6 +485,15 @@ async def main() -> int:
                 check("json_response=on → 回应是 application/json（不再是 SSE 帧）",
                       "application/json" in ctype6, ctype6)
                 check("纯 JSON 回应里带得回真实结果", "hard6" in body6b, body6b[:60])
+                # 浏览器访问（text/html + Mozilla UA）→ 人话提示页；MCP 客户端不受影响
+                req7 = urllib.request.Request(
+                    f"http://127.0.0.1:{port6}/w-hard6", method="GET",
+                    headers={"Accept": "text/html,application/xhtml+xml",
+                             "User-Agent": "Mozilla/5.0 (iPhone)"})
+                with _noproxy6.open(req7, timeout=10) as resp:
+                    land = resp.read().decode("utf-8", "replace")
+                check("浏览器式 GET 得到人话提示页（手机打开不再白屏转圈）",
+                      "灯塔窗口" in land and "hard6" in land, land[:60].replace("\n", " "))
             finally:
                 srv6.terminate()
                 try:

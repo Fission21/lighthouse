@@ -181,6 +181,7 @@ Same window; you pick who gets in and how:
 | **Local AI clients** (WorkBuddy / Codex / Claude Code…) | The default: `http://127.0.0.1:<port>/<path>` | ✅ | No |
 | **Devices on your LAN** (your phone, another computer) | `bash lighthouse.sh lan <id> on` → `http://<lan-ip>:<port>/<path>` | ✅ | No |
 | **Your own devices elsewhere** (feels like one LAN) | Tailscale: private IP `http://100.x.y.z:<port>/<path>`, or `tailscale funnel` to go public | ✅ | No |
+| **You own a public server** (no domain) | `bash lighthouse.sh relay <id> on --host root@<server-ip>` → `http://<server-ip>:<port>/<path>` | ✅ (your server) | No |
 | **ChatGPT web / mobile** | **ngrok free** (one static `*.ngrok-free.app` domain per account) or **Tailscale Funnel** (`https://<device>.<tailnet>.ts.net`) | ✅ | No |
 | Same, fewest moving parts | Cloudflare named tunnel + your own domain (the `publish` pipeline) | domain only (cheap ones exist) | Yes |
 
@@ -191,6 +192,10 @@ Details that matter:
   ⚠️ Visible on the LAN with no TLS (the random path segment is the only "password") — enable it only on networks you trust, and `lan <id> off` to close it. Takes effect after `restart`.
 - **ngrok free**: accounts come with one static dev domain; run `ngrok http --domain=<your-dev-domain> <window-port>` and point the connector at `https://…/<window-path>`. Free-tier limits are fine for personal use.
 - **Tailscale**: every device gets a `100.x.y.z` private IP — peers on the same tailnet reach `http://100.x.y.z:<port>/<path>` with no domain and no public exposure; run `tailscale funnel <port>` when you *do* want a free public HTTPS URL (`https://<device>.<tailnet>.ts.net`).
+- **Public-server IP direct (`relay`)**: hang the window on your own server's `IP:port` via an `ssh -R` reverse
+  tunnel — any device (even on 5G) reaches `http://<server-ip>:<port>/<window-path>`, **no domain at all**.
+  ⚠️ Plain HTTP; the random path segment is the entire credential; the server's sshd needs
+  `GatewayPorts clientspecified`; web-AI connectors require HTTPS, so this tier is for local/phone AI clients.
 - **Cloudflare Quick Tunnel** (`cloudflared tunnel --url …`): no account, no domain — but the URL changes every restart and SSE is officially unsupported; in our own test it did not route at all (Cloudflare edge 404). **Not recommended** for MCP.
 - **Public-IP direct**: possible in theory (public IP + port forwarding + your own cert), but most home connections are behind NAT and web-AI connectors require an HTTPS hostname — realistic only for LAN/VPN clients.
 - **Client that chokes on SSE?** `json-response <id> on` switches the window to plain JSON replies (standard clients accept both; SSE stays the default).
@@ -214,6 +219,7 @@ bash lighthouse.sh auto-grant <id> off   # back to ask-first (applies to the ver
 bash lighthouse.sh chat-approval <id> on [--ceiling "src/**"]   # in-chat approval: you say "I authorize it" and it takes effect (off by default)
 bash lighthouse.sh lan <id> on|off|status            # LAN direct: reach it at http://<lan-ip>:<port>/<path> (off by default)
 bash lighthouse.sh json-response <id> on|off|status  # plain-JSON replies for tunnels/clients that can't do SSE
+bash lighthouse.sh relay <id> on|off|status   # public-IP direct: hang it on your server's IP:port via ssh -R (no domain)
 bash lighthouse.sh deny <id>             # revoke every elevation at once
 bash lighthouse.sh test [id]             # the five suites
 bash lighthouse.sh doctor                # interpreter / deps / tunnel / config check
@@ -271,7 +277,7 @@ lighthouse/
 ├── windows.json         # window registry: the visible scope of every window lives here
 ├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
-├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 56 / hardening 55) + run_all_tests.sh
+├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 56 / hardening 56) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -334,7 +340,7 @@ nothing but a pile of local scripts.
   (`chat-approval` — the user says "I authorize it" in the conversation; opt-in, trust-based, local agents only). The server now runs **stateless HTTP** (`stateless_http`): restarting it no longer
   invalidates connected clients' sessions — clients that never re-handshake (e.g. WorkBuddy) no longer hit
   "Session not found". Grant receipts now flag `dir/`-style patterns that only cover the directory entry itself and
-   point to `dir/**` (no more "approved but unreadable"); `window_info` lists the full tool set. New: **pick your exposure route** (`lan` for LAN-IP direct, `json-response` for SSE-less tunnels, free ngrok/Tailscale recipes). — 195 checks total.
+   point to `dir/**` (no more "approved but unreadable"); `window_info` lists the full tool set. New: `relay` (public-server IP direct via `ssh -R`, no domain) and a browser landing line for humans; **pick your exposure route** (`lan` for LAN-IP direct, `json-response` for SSE-less tunnels, free ngrok/Tailscale recipes). — 196 checks total.
 - **v1.1** — in-chat elevation (request-only + `approve` / `elevate` / `deny` / `scope`) · scope is asked at
   window-creation time (never silently defaults to `**/*`) · 4th test suite (102 checks total).
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,
