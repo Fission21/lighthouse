@@ -228,6 +228,24 @@
 
 ---
 
+### #18 授予「只覆盖目录本身」的 pattern 会假成功（`dir/` 报 granted，但读 `dir/file` 仍被拒）
+
+- **发现**：2026-09-20（外部实测者 WorkBuddy 在「先拒后授权」演练中撞到并当场报告）
+- **现象**：申请 `perm-test/` → 回执 `status: granted`，看似成功；但再读 `perm-test/hello.md` 仍回
+  「不在给看范围」，同目录 `list_files` 也被拒。补申请 `perm-test/**` 才真正读通。
+- **根因**：授予校验（`_validate_patterns`：只查绝对路径/`..`/长度）与读取校验（glob 匹配）是两套逻辑——
+  `dir/` 这类 pattern 能被收下并写进 grant，却匹配不到 `dir/` 下的任何文件路径。
+- **期望**：授予回执必须说清这条 pattern 实际放开什么；这类 pattern 当场提示改用 `dir/**`。
+- **证据**：审计 `~/.lighthouse/audit/miji.jsonl`（2026-09-20）——
+  `16:19:21 request_access include=['perm-test/'] → granted` → `16:19:29 read_file perm-test/hello.md → 不在给看范围`
+  → `16:20:08 request_access ['perm-test/**']` → `16:20:17 read_file perm-test/hello.md ✅`。
+- **区域**：`core/scope.py`（匹配语义）、`core/server.py`（request_access 回执）、`lighthouse.sh`（approve/elevate）
+- **严重度**：中（功能可用，但会让用户误判「已经批了」）
+- **状态**：已修（commit `c34cafb`）：新增 `scope.dir_only_patterns()` / `dir_only_hint()`；自动授予、对话内授权、
+  预授权与待批回执全部带 `hint`；CLI `approve` / `elevate` 同样打 ⚠️；提权套件 ⑪（5 项）锁死该行为。
+
+---
+
 ## 模板（复制用）
 
 ```markdown
