@@ -265,12 +265,17 @@ class Window:
         """本窗口的提权策略（实时读注册表；读不到退回启动时的快照 —— 两处都是 fail-closed）。"""
         return CONF.auto_grant_policy(_live_cfg() or self.cfg)
 
+    def auto_grant_ttl(self) -> int | None:
+        """常驻策略里「自动授予的时长」（分钟）；None = 无期限。"""
+        return CONF.window_auto_grant_ttl(_live_cfg() or self.cfg)
+
     def scope_summary(self) -> dict:
         wcfg = self.cfg.get("write", {}) or {}
         master = bool(wcfg.get("enabled", False))
         sw = read_switches().get(self.id, {}) or {}
         until = sw.get("until")
         _auto, _ceiling = self.policy()
+        _ttl = self.auto_grant_ttl() if _auto else None
         live = master and bool(sw.get("enabled")) and not (until and time.time() > float(until))
         return {
             "window": self.id,
@@ -286,12 +291,14 @@ class Window:
                 **SCOPE.summary(self.id),
                 "auto_grant": _auto,
                 "auto_grant_ceiling": ((_ceiling or "不限（任何范围申请都会自动生效）") if _auto else None),
+                "auto_grant_ttl": (SCOPE.describe_duration(_ttl) if _auto else None),
                 "how_to_ask": (
                     "需要看更多时，让 agent 调 request_access(reason, include) 提出申请——"
                     "它只能申请，批准权在用户手里。用户在部署机器上批准：`lighthouse.sh approve <窗口>`；"
                     "或先开一个预授权窗口：`lighthouse.sh elevate <窗口> 30 [--scope \"src/**\"]`；"
-                    "或为该窗口声明常驻策略：`lighthouse.sh auto-grant <窗口> on [--ceiling \"src/**\"]`"
+                    "或为该窗口声明常驻策略：`lighthouse.sh auto-grant <窗口> on [--ceiling \"src/**\"] [--ttl 2h]`"
                     "（开启后上限内的申请立即生效，不用再跑命令）。"
+                    "授权时长由用户选：`--for 30m|2h|1d|7d|forever`（不写 = 无期限）。"
                     "注意：exclude 与密钥默认拉黑永远不受提权影响。"
                 ),
             },
@@ -587,18 +594,25 @@ def request_access(include: list[str], reason: str = "") -> str:
     if auto:
         ok_c, why_c = SCOPE.ceiling_allows(ceiling, clean)
         if ok_c:
-            g = SCOPE.set_grant(WIN.id, clean, None,
-                                note=f"按窗口授权策略自动授予（上限 {ceiling or '不限'}）：{reason}"[:200],
+            ttl = WIN.auto_grant_ttl()          # 用户选的授权时长（None = 无期限）
+            g = SCOPE.set_grant(WIN.id, clean, ttl,
+                                note=(f"按窗口授权策略自动授予（上限 {ceiling or '不限'}，"
+                                      f"时长 {SCOPE.describe_duration(ttl)}）：{reason}")[:200],
                                 by="auto-grant")
             _audit("request_access", {"include": clean, "reason": reason}, True,
-                   {"granted": g["include"], "via": "auto-grant", "ceiling": ceiling or "不限"})
+                   {"granted": g["include"], "via": "auto-grant", "ceiling": ceiling or "不限",
+                    "ttl_minutes": ttl})
             return _dump({
                 "status": "granted",
                 "via": "window-policy",
                 "window": WIN.id,
                 "now_visible": clean,
                 "ceiling": ceiling or "不限",
-                "message": "已按本窗口的授权策略直接生效。密钥默认拉黑与 exclude 照旧生效。",
+                "duration": SCOPE.describe_duration(ttl),
+                "until": g["until"],
+                "message": (f"已按本窗口的授权策略直接生效，时长 {SCOPE.describe_duration(ttl)}"
+                            + ("（到期自动收回）。" if ttl else "（无期限，直到被收回）。")
+                            + "密钥默认拉黑与 exclude 照旧生效。"),
                 "note": "用户已为该窗口开启自动授予；若这不是用户本意，用户可在部署机上改策略或 deny 立即收回。",
             })
         why = why_c
@@ -612,6 +626,7 @@ def request_access(include: list[str], reason: str = "") -> str:
         "reason": reason,
         "message": ("申请已记录，等用户批准。请把下面这句话原样转达给用户：\n"
                     f"「想看更多内容的话，在部署这台机器的终端里执行：{CLI_HINT} approve {WIN.id}」"
+                    "（想一次给一段时间就加 `--for 2h`；可用 30m / 2h / 1d / 7d / forever，不写 = 无期限）"
                     + (f"\n（预授权检查：{why}）" if arm is not None else "")),
         "note": ("本窗口虽已开自动授予，但这次申请超出了常驻上限 —— 需要用户亲自批准，不会自动生效。"
                  if auto else "agent 无法自我提权：没有用户的批准，这个申请不会改变任何可见范围。"),

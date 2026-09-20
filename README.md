@@ -124,7 +124,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 29/29   ✅ 加固 47/47
+#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 42/42   ✅ 加固 47/47
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -163,9 +163,9 @@ bash lighthouse.sh write <id> on 30      # 开 30 分钟写权限（到点自动
 bash lighthouse.sh write <id> off        # 立刻回到只读
 bash lighthouse.sh write status          # 现在谁能写
 bash lighthouse.sh scope <id>            # 当前授权状态（额外范围 / 待批申请 / 常驻策略）
-bash lighthouse.sh approve <id>          # 批准它的提权申请
-bash lighthouse.sh elevate <id> 30 --scope "src/**"   # 限时预授权：30 分钟内这类申请自动批
-bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"]   # 常驻策略：上限内申请立即生效
+bash lighthouse.sh approve <id> [--for 2h]   # 批准它的提权申请（--for 选时长：30m/2h/1d/7d/forever）
+bash lighthouse.sh elevate <id> --for 30m --scope "src/**"   # 限时预授权：期间这类申请自动批
+bash lighthouse.sh auto-grant <id> on [--ceiling "src/**,docs/**"] [--ttl 2h]   # 常驻策略：上限内申请立即生效（--ttl 限每次授予时长）
 bash lighthouse.sh auto-grant <id> off   # 回到逐次批准（下次申请立即生效，不用重启）
 bash lighthouse.sh deny <id>             # 收回全部提权
 bash lighthouse.sh test [id]             # 一键验收
@@ -194,10 +194,12 @@ bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 
   而且授予只加宽 include，**压不过** exclude 与密钥拉黑——提权 ≠ 解禁；
 - **常驻策略是「你事先授权」**：`auto-grant <窗口> on --ceiling "src/**,docs/**"` 之后，上限内的申请直接生效、
   不用再跑命令；超出上限照样转待批；不设 `--ceiling` 就是「任何范围申请都自动生效」。
+  加个 `--ttl 2h`，每次自动授予就只保持 2 小时——到期自动收回，AI 需要时再申请，授权不会永久累积；
   策略**实时读**：`off` 一敲，下一次申请立刻回到 pending，不用重启服务；
 - **网页那边点的是另一层**：ChatGPT 弹的「允许使用 X？」是**平台自己的**工具调用确认，不是灯塔的授权；
   开了自动授予之后，申请甚至可能**没有任何弹窗**就直接生效——`--ceiling` 与审计日志才是你的知情手段；
-- **三种给法、随时收回**：常驻策略 `auto-grant` / 事后批准 `approve` / 限时预授权 `elevate`；
+- **三种给法、随时收回**：常驻策略 `auto-grant` / 事后批准 `approve` / 限时预授权 `elevate`——
+  **授权多久由你挑**：`--for 30m|2h|1d|7d|forever`（不写 = 无期限）；
   `deny <id>` 一把清空，`auto-grant <id> off` 关掉常驻策略。
 
 这就是「把选择的权利交给你」的落地方式：**方便归方便，闸门永远在你手里。**
@@ -211,7 +213,7 @@ lighthouse/
 ├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
 ├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
-├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 29 / 加固 47）+ run_all_tests.sh
+├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 42 / 加固 47）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
@@ -265,7 +267,8 @@ lighthouse/
 ## 更新日志
 
 - **v1.2** —— 常驻提权策略 `auto-grant`（上限内的申请立即生效，超出仍待批；策略实时读，`off` 立刻收紧）；
-  闸门加固（大小写绕过、`.git/` 整目录、密钥名变体）；新增第 5 套「加固」攻击性测试，共 136 项。
+  闸门加固（大小写绕过、`.git/` 整目录、密钥名变体）；新增第 5 套「加固」攻击性测试；
+  **授权时长可自选**（`--for 30m|2h|1d|7d|forever`，`approve` / `elevate` / `auto-grant --ttl` 通用），共 173 项。
   另修两处：CLI 与服务的注册表路径统一、`restart` 不再因 `$0` 相对路径失败。
 - **v1.1** —— 对话内提权（申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围 + 第 4 套测试（共 102 项）。
 - **v1.0** —— 首个开源版：四道闸、脱敏、审计、写开关两级锁、三套测试、多窗口路径分流、launchd/systemd 服务生成。

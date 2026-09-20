@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,6 +90,47 @@ def _describe_until(until) -> str:
     if not until:
         return "无期限"
     return f"{datetime.fromtimestamp(float(until), CST):%Y-%m-%d %H:%M} 自动失效"
+
+
+# ---------------------------------------------------------------- 时长（用户自选：短到长到永久）
+# 「授权多久」是用户的选择，不是工具的默认值：30m / 2h / 1d / 7d / 1w / forever。
+# 解析失败**必须报错**（CLI 负责翻译成人话）——算不清时长的授权不该被授出去。
+_UNIT_MINUTES = {"m": 1, "h": 60, "d": 1440, "w": 10080}
+_DURATION_RE = re.compile(
+    r"^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$")
+_FOREVER_WORDS = {"forever", "permanent", "always", "none", "", "永久", "永远", "无期限"}
+
+
+def parse_duration(s) -> int | None:
+    """用户写的时长 → 分钟数；None = 无期限。
+
+    支持 `30m` / `2h` / `1d` / `7d` / `1w`（也接受 30min / 2hr / 3days…）；
+    纯数字按分钟（向后兼容 `--minutes`）；`forever` / 空 / 0 → 无期限。
+    """
+    if s is None:
+        return None
+    t = str(s).strip().lower()
+    if t in _FOREVER_WORDS or t == "0":
+        return None
+    if t.isdigit():
+        return int(t)
+    m = _DURATION_RE.match(t)
+    if not m:
+        raise ValueError(f"看不懂的时长 {s!r}（可用：30m / 2h / 1d / 7d / 1w / forever）")
+    n, unit = int(m.group(1)), m.group(2)
+    if n <= 0:
+        raise ValueError(f"时长必须大于 0：{s!r}")
+    return n * _UNIT_MINUTES[unit[0]]
+
+
+def describe_duration(minutes: int | None) -> str:
+    """给人看的时长：30 → '30 分钟'；120 → '2 小时'；10080 → '7 天'；None → '无期限'。"""
+    if not minutes:
+        return "无期限"
+    for unit, name in ((10080, "周"), (1440, "天"), (60, "小时")):
+        if minutes % unit == 0:
+            return f"{minutes // unit} {name}"
+    return f"{minutes} 分钟"
 
 
 # ---------------------------------------------------------------- grant（已授予的额外范围）

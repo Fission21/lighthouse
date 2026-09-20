@@ -14,6 +14,8 @@
   ⑦ 过期即失效
   ⑧ 常驻策略（auto-grant）：开启后上限内申请立即生效；超出上限仍 pending；
      关闭后立即回到 pending；上限配置可疑时 fail-closed；拉黑始终压过自动授予
+  ⑨ 时长可自选（30m / 2h / 1d / forever）：解析不吞错；approve --for 30m 真的落成
+     30 分钟有效期；auto-grant --ttl 2h 让每次自动授予带 2 小时到期
 
 用法: python3 test_elevate.py [--keep]
 """
@@ -207,6 +209,46 @@ async def main() -> int:
                 g7 = await call(session, "request_access", {"include": ["code/**"], "reason": "配置可疑"})
                 check("上限配置可疑时退化成 pending（fail-closed）", g7.get("status") == "pending",
                       json.dumps(g7, ensure_ascii=False)[:80])
+
+                print("\n⑨ 时长可自选：30m / 2h / 1d / forever（短长由用户挑）")
+                if str(REPO / "core") not in sys.path:
+                    sys.path.insert(0, str(REPO / "core"))
+                import scope as S
+                check("parse_duration('30m') = 30 分钟", S.parse_duration("30m") == 30)
+                check("parse_duration('2h') = 120 分钟", S.parse_duration("2h") == 120)
+                check("parse_duration('1d') = 1440 分钟", S.parse_duration("1d") == 1440)
+                check("parse_duration('90') = 90（纯数字按分钟）", S.parse_duration("90") == 90)
+                check("parse_duration('forever') = 无期限", S.parse_duration("forever") is None)
+                try:
+                    S.parse_duration("两天半")
+                    bad_dur = False
+                except ValueError:
+                    bad_dur = True
+                check("看不懂的时长必须报错（不许静默吞）", bad_dur)
+
+                cli("deny", "elev", env=env)
+                await call(session, "request_access", {"include": ["code/**"], "reason": "测时长"})
+                out = cli("approve", "elev", "--for", "30m", env=env)
+                check("CLI approve --for 30m 成功", "已批准" in out and "30 分钟" in out,
+                      out.replace("\n", " ")[:90] if out else "")
+                c8 = await call(session, "read_file", {"path": "code/app.py"})
+                check("按 --for 批准后代码可读", bool(c8.get("content")))
+                data = json.loads((state / "state" / "window-scope.json").read_text(encoding="utf-8"))
+                until = data["elev"]["grant"].get("until")
+                left = None if until is None else int(until - time.time())
+                check("有效期真的落在 ≈30 分钟（不是无期限）", left is not None and abs(left - 1800) < 120,
+                      f"剩 {left}s")
+
+                cli("deny", "elev", env=env)
+                out = cli("auto-grant", "elev", "on", "--ceiling", "code/**", "--ttl", "2h", env=env)
+                check("CLI auto-grant --ttl 2h 成功", "2 小时" in out, out.replace("\n", " ")[:90] if out else "")
+                g9 = await call(session, "request_access", {"include": ["code/**"], "reason": "带 ttl 的自动授予"})
+                check("自动授予仍 granted", g9.get("status") == "granted", json.dumps(g9, ensure_ascii=False)[:80])
+                check("自动授予的回执带时长", g9.get("duration") == "2 小时", json.dumps(g9, ensure_ascii=False)[:80])
+                data = json.loads((state / "state" / "window-scope.json").read_text(encoding="utf-8"))
+                until = data["elev"]["grant"].get("until")
+                left = None if until is None else int(until - time.time())
+                check("auto-grant 的授权真的落在 ≈2 小时", left is not None and abs(left - 7200) < 150, f"剩 {left}s")
 
     finally:
         srv.terminate()

@@ -93,7 +93,7 @@ PYEOF
 run "通用冒烟(13项)"  "$PY" "$HERE/smoke_window.py"  "$URL"
 run "只读审计(45项)"  "$PY" "$HERE/audit_readonly.py" "$URL" "$WROOT"
 run "写开关(25项)"    "$PY" "$HERE/test_write.py"    "$URL" "$WIN" "$WROOT"
-run "提权(29项)"      "$PY" "$HERE/test_elevate.py"
+run "提权(42项)"      "$PY" "$HERE/test_elevate.py"
 run "加固(47项)"      "$PY" "$HERE/test_hardening.py"
 
 echo

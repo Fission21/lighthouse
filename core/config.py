@@ -93,6 +93,18 @@ def window_ceiling(cfg: dict) -> list[str]:
     return clean_patterns(cfg.get("elevation_ceiling"))
 
 
+def window_auto_grant_ttl(cfg: dict) -> int | None:
+    """常驻策略里「自动授予的时长」（分钟数）；缺省 / 可疑 = None（无期限，维持老行为）。
+
+    注意：它只是「授多久」的旋钮，不是权限边界 —— 边界由 auto_grant / ceiling 决定
+    （那两个都 fail-closed）。类型不对就当没写：避免手改配置写错一个字，把自动授予搞成不好用。
+    """
+    raw = cfg.get("auto_grant_ttl_minutes")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return None
+
+
 def auto_grant_policy(cfg: dict) -> tuple[bool, list[str]]:
     """(是否自动授予, 上限)。
 

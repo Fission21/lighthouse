@@ -11,10 +11,14 @@
 #   url <id> [--public]  打印窗口地址（本机 / 公网）
 #   publish              生成隧道配置 + 重启隧道 + 公网健康检查（会拦 visibility=local 的窗口）
 #   write <id> on [分钟] | off | status    写开关（默认全只读）
-#   elevate <id> [分钟] [--scope "src/**"]  预授权窗口：期间 agent 的范围申请在上限内自动批
-#   auto-grant <id> on [--ceiling "src/**,docs/**"] | off | status
+#   elevate <id> [分钟|--for 2h] [--scope "src/**"]
+#                                           预授权窗口：期间 agent 的范围申请在上限内自动批
+#   auto-grant <id> on [--ceiling "src/**,docs/**"] [--ttl 2h|forever] | off | status
 #                                           常驻提权策略：开启后上限内的申请立即生效（不用再跑命令）
-#   approve <id> [--scope ...] [--minutes N] 批准 agent 的范围申请
+#   approve <id> [--scope ...] [--for 2h|forever] [--minutes N]
+#                                           批准 agent 的范围申请；--for 选授权时长
+#   时长写法（approve / elevate / auto-grant --ttl 通用）：30m / 2h / 1d / 7d / 1w / forever
+#                                           （纯数字 = 分钟；不写 = 无期限，用 deny 收回）
 #   deny <id>                               收回全部提权（额外范围/待批申请/预授权窗口）
 #   scope <id>                              看当前授权状态（含常驻策略）
 #   issue "标题" [--area 模块] [--sev 高|中|低] [--detail "现象"]
@@ -160,23 +164,32 @@ PYEOF
   elevate)
     # 预授权窗口：N 分钟内，agent 的范围申请在「上限」内自动批准
     shift
-    id="${1:?用法: lighthouse.sh elevate <窗口id> [分钟数] [--scope \"src/**,*.py\"]}"; shift || true
-    mins=30; scope=""
+    id="${1:?用法: lighthouse.sh elevate <窗口id> [分钟数|--for 2h] [--scope \"src/**,*.py\"]}"; shift || true
+    mins=30; scope=""; dur=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --scope) scope="$2"; shift 2 ;;
+        --for|--duration) dur="$2"; shift 2 ;;
         ''|*[!0-9]*) shift ;;
         *) mins="$1"; shift ;;
       esac
     done
-    "$PY" - "$CORE" "$id" "$mins" "$scope" <<'PYEOF'
+    "$PY" - "$CORE" "$id" "$mins" "$scope" "$dur" <<'PYEOF'
 import sys
 sys.path.insert(0, sys.argv[1])
 import scope as S
-wid, mins, scope = sys.argv[2], sys.argv[3], sys.argv[4]
+wid, mins, scope, dur = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 allowed = [x.strip() for x in scope.split(",") if x.strip()] if scope else []
-arm = S.set_arm(wid, int(mins), allowed, note="CLI 预授权窗口")
-print(f"✅ 已开预授权窗口: {wid} — {mins} 分钟，范围上限 {allowed or '不限（申请多少批多少，密钥/exclude 仍不可见）'}")
+try:
+    m = S.parse_duration(dur) if dur else int(mins)
+except ValueError as e:
+    print(f"❌ {e}")
+    raise SystemExit(1)
+if not m:
+    print("❌ 预授权窗口需要一个时长（例如 --for 30m）；无期限的批量放行请用 auto-grant")
+    raise SystemExit(1)
+arm = S.set_arm(wid, int(m), allowed, note="CLI 预授权窗口")
+print(f"✅ 已开预授权窗口: {wid} — {S.describe_duration(int(m))}，范围上限 {allowed or '不限（申请多少批多少，密钥/exclude 仍不可见）'}")
 print("   期间 agent 调 request_access 会在上限内自动批准；到期自动失效。")
 print(f"   想提前收回：bash lighthouse.sh deny {wid}")
 PYEOF
@@ -185,28 +198,34 @@ PYEOF
   approve)
     # 批准 agent 的申请（不给 --scope 就用它申请的那套范围）
     shift
-    id="${1:?用法: lighthouse.sh approve <窗口id> [--scope \"src/**\"] [--minutes N]}"; shift || true
-    minutes=""; scope=""
+    id="${1:?用法: lighthouse.sh approve <窗口id> [--scope \"src/**\"] [--for 2h|forever] [--minutes N]}"; shift || true
+    minutes=""; scope=""; dur=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --minutes) minutes="$2"; shift 2 ;;
+        --for|--duration) dur="$2"; shift 2 ;;
         --scope) scope="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
-    "$PY" - "$CORE" "$id" "$minutes" "$scope" <<'PYEOF'
+    "$PY" - "$CORE" "$id" "$minutes" "$scope" "$dur" <<'PYEOF'
 import sys
 sys.path.insert(0, sys.argv[1])
 import scope as S
-wid, minutes, scope = sys.argv[2], sys.argv[3], sys.argv[4]
+wid, minutes, scope, dur = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 pend = S.get_pending(wid) or {}
 include = [x.strip() for x in scope.split(",") if x.strip()] if scope else (pend.get("include") or [])
 if not include:
-    print(f"没有待批准的申请，也没给 --scope。用法：bash lighthouse.sh approve {wid} [--scope \"src/**\"] [--minutes 60]")
+    print(f"没有待批准的申请，也没给 --scope。用法：bash lighthouse.sh approve {wid} [--scope \"src/**\"] [--for 2h]")
     raise SystemExit(1)
-g = S.set_grant(wid, include, int(minutes) if minutes else None, note=(pend.get("reason") or "CLI 批准")[:200])
+try:
+    mins = S.parse_duration(dur) if dur else (int(minutes) if minutes else None)
+except ValueError as e:
+    print(f"❌ {e}")
+    raise SystemExit(1)
+g = S.set_grant(wid, include, mins, note=(pend.get("reason") or "CLI 批准")[:200])
 print(f"✅ 已批准 {wid}：额外可见 {g['include']}")
-print("   有效期：" + ("无期限（用 `bash lighthouse.sh deny " + wid + "` 收回）" if not g["until"] else S._describe_until(g["until"])))
+print("   授权时长：" + (f"{S.describe_duration(mins)}（{S._describe_until(g['until'])}）" if g["until"] else "无期限（用 `bash lighthouse.sh deny " + wid + "` 收回）"))
 if pend:
     print("   （申请的缘因：" + (pend.get("reason") or "未填写") + "）")
 PYEOF
@@ -232,9 +251,11 @@ sys.path.insert(0, sys.argv[1])
 import scope as S, config as C
 wid = sys.argv[2]
 info = S.summary(wid)
-auto, ceil = C.auto_grant_policy(C.windows(include_disabled=True).get(wid, {}))
+w = C.windows(include_disabled=True).get(wid, {})
+auto, ceil = C.auto_grant_policy(w)
 info["auto_grant"] = auto
 info["auto_grant_ceiling"] = (ceil or "不限（任何范围申请都会自动生效）") if auto else None
+info["auto_grant_ttl"] = S.describe_duration(C.window_auto_grant_ttl(w)) if auto else None
 print(json.dumps({wid: info}, ensure_ascii=False, indent=2))
 
 r = info.get("recent_calls") or {}
@@ -298,20 +319,22 @@ PYEOF
   auto-grant)
     # 常驻提权策略：on = 上限内的 agent 申请立即生效（不用再跑本地命令）；off = 回到必须用户批准
     shift
-    id="${1:?用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling \"src/**,docs/**\"]}"; shift || true
+    id="${1:?用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling \"src/**,docs/**\"] [--ttl 2h|forever]}"; shift || true
     act="${1:-status}"; shift || true
-    ceiling=""
+    ceiling=""; ttl=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --ceiling) ceiling="$2"; shift 2 ;;
+        --ttl|--for) ttl="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
-    "$PY" - "$CORE" "$id" "$act" "$ceiling" <<'PYEOF'
+    "$PY" - "$CORE" "$id" "$act" "$ceiling" "$ttl" <<'PYEOF'
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import config as C
-wid, act, ceiling = sys.argv[2], sys.argv[3], sys.argv[4]
+import scope as S
+wid, act, ceiling, ttl = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 path = C.REGISTRY_PATH
 reg = json.loads(path.read_text(encoding="utf-8"))
 wins = reg.get("windows", {})
@@ -326,22 +349,34 @@ if act == "status":
     print(f"  申请即授予 : {'开' if auto else '关（申请只记 pending，等用户批准）'}")
     if auto:
         print(f"  常驻上限   : {ceil or '不限（任何范围申请都会自动生效；拉黑/exclude 照旧）'}")
+        print(f"  授权时长   : {S.describe_duration(C.window_auto_grant_ttl(w))}（每次自动授予保持这么久）")
     print(f"  注册表     : {path}")
     raise SystemExit(0)
 
 if act == "off":
     w.pop("auto_grant", None)
     w.pop("elevation_ceiling", None)
+    w.pop("auto_grant_ttl_minutes", None)
     path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"🔒 已关闭 {wid} 的自动授予：之后 agent 的申请只会记成待批，需要你跑 approve（或开预授权窗口）。")
     print(f"   已授予的范围不会自动收回；要一并收回：bash lighthouse.sh deny {wid}")
     raise SystemExit(0)
 
 if act != "on":
-    print('用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling "src/**,docs/**"]')
+    print('用法: lighthouse.sh auto-grant <窗口id> on|off|status [--ceiling "src/**,docs/**"] [--ttl 2h|forever]')
+    raise SystemExit(1)
+
+try:
+    ttl_min = S.parse_duration(ttl) if ttl else None
+except ValueError as e:
+    print(f"❌ {e}")
     raise SystemExit(1)
 
 w["auto_grant"] = True
+if ttl_min:
+    w["auto_grant_ttl_minutes"] = ttl_min
+else:
+    w.pop("auto_grant_ttl_minutes", None)
 if ceiling:
     pats = [x.strip() for x in ceiling.split(",") if x.strip()]
     bad = [p for p in pats if p.startswith("/") or ".." in p or len(p) > 200]
@@ -354,6 +389,7 @@ else:
 path.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(f"✅ 已为 {wid} 开启「申请即授予」")
 print(f"   常驻上限：{ceiling or '不限（任何范围申请都会自动生效）'}")
+print(f"   授权时长：{S.describe_duration(ttl_min)}（每次自动授予保持这么久，到期自动收回；可换 --ttl 30m|2h|1d|7d|forever）")
 print("   之后 agent 在对话里申请 → 直接生效，不用再跑本地命令。")
 print(f"   ⚠️ 密钥默认拉黑与 exclude 仍然压过一切；想马上收紧：bash lighthouse.sh auto-grant {wid} off")
 PYEOF
