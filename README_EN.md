@@ -220,6 +220,8 @@ Key points:
 - **In-chat approval (opt-in)**: with `chat-approval <id> on`, the agent asks, you answer "yes, authorize it" in the
   conversation, and it re-requests with `user_confirmed=true` to take effect — no terminal needed. Trust-based
   (the server cannot verify what you actually said), off by default, meant for local/trusted agents only.
+- **Glob your directories**: `--scope "dir/"` covers only the directory entry itself and opens nothing inside it —
+  write `dir/**` to reach the files under it. (Grant receipts now warn about this on the spot.)
 
 That is how “the choice stays with the owner” is implemented: **as open or as tight as you decide — the gates stay in your hand.**
 
@@ -294,7 +296,8 @@ nothing but a pile of local scripts.
   (`--for 30m|2h|1d|7d|forever`; `auto-grant --ttl` makes each auto-grant expire). New: in-chat approval
   (`chat-approval` — the user says "I authorize it" in the conversation; opt-in, trust-based, local agents only). The server now runs **stateless HTTP** (`stateless_http`): restarting it no longer
   invalidates connected clients' sessions — clients that never re-handshake (e.g. WorkBuddy) no longer hit
-  "Session not found". — 189 checks total.
+  "Session not found". Grant receipts now flag `dir/`-style patterns that only cover the directory entry itself and
+   point to `dir/**` (no more "approved but unreadable"); `window_info` lists the full tool set. — 189 checks total.
 - **v1.1** — in-chat elevation (request-only + `approve` / `elevate` / `deny` / `scope`) · scope is asked at
   window-creation time (never silently defaults to `**/*`) · 4th test suite (102 checks total).
 - **v1.0** — first public release: four gates, redaction, audit, write switch (two locks), three test suites,

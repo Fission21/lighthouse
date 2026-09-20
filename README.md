@@ -276,7 +276,8 @@ lighthouse/
   闸门加固（大小写绕过、`.git/` 整目录、密钥名变体）；新增第 5 套「加固」攻击性测试；
   **授权时长可自选**（`--for 30m|2h|1d|7d|forever`，`approve` / `elevate` / `auto-grant --ttl` 通用）；
   新增**对话内授权**（`chat-approval`：你回一句「授权你」即生效；默认关、信任式通道，仅限本机可信 agent）；服务端改用**无状态传输**（`stateless_http`），重启服务不再作废已连客户端的会话——
-  不自动重连的客户端（如 WorkBuddy）不会再报「Session not found」，共 189 项。
+  不自动重连的客户端（如 WorkBuddy）不会再报「Session not found」；授予回执对 `dir/` 这类「只覆盖目录本身」的
+   pattern 当场提示改用 `dir/**`（不再假成功），`window_info` 补全工具清单，共 189 项。
   另修两处：CLI 与服务的注册表路径统一、`restart` 不再因 `$0` 相对路径失败。
 - **v1.1** —— 对话内提权（申请制 + `approve`/`elevate`/`deny`/`scope`）+ 开窗先问范围 + 第 4 套测试（共 102 项）。
 - **v1.0** —— 首个开源版：四道闸、脱敏、审计、写开关两级锁、三套测试、多窗口路径分流、launchd/systemd 服务生成。
