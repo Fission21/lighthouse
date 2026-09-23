@@ -344,6 +344,8 @@ lighthouse/
 | 注册表位置 | 服务从 `core/` 找 `windows.json` 找不到 | 相对路径按**仓库根**解析（已修，见 core/server.py） |
 | 网页 AI 回答卡在第一个字 | 其实生成完了 | 刷新页面 |
 | ChatGPT 无法从本机直连 | —— | 灯塔全程走隧道出站，不需要公网 IP、不需要开端口 |
+| 资料库放 `~/Documents` 后工具调用挂住 | 服务能启动、台账能读，但一有可见资料就永久挂（等 TCC 权限弹窗，审计里一条都没有） | 资料库放非保护目录；或给跑服务的 python 加「完全磁盘访问权限」。详见 [docs/KB.md](docs/KB.md) 第八节 |
+| `lighthouse.sh start` 起的服务报 `No module named 'mcp'` | 生成的 plist 里写的是光杆 `python3` | 起服务前 `export LIGHTHOUSE_PY=<带 mcp 的解释器>`；已生成错了就删 plist 重新 `start` |
 
 ## 更新日志
 

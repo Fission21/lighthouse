@@ -152,7 +152,21 @@ bash lighthouse.sh kb notify bidkb --ack      # 汇报完打标，避免重复�
 有新申请就让 agent 告诉你。**申请只读不写**：MCP 侧没有任何写台账的能力，
 同事的 AI 无论如何都改不了「谁能看什么」。
 
-## 八、安全边界（写清楚哪些事做不到）
+## 八、部署坑：资料库别放在被系统保护的目录里
+
+macOS 上 `~/Documents`、`~/Desktop`、`~/Downloads` 属于 TCC 保护目录。窗口服务常驻运行（launchd/systemd），
+**不在**你的终端权限里 —— 如果资料库根目录放在这些位置，服务启动看起来正常、台账也读得到，
+但只要有一篇「这个地址有权看」的资料，任何工具调用都会**永久挂住**（等一个不会出现的权限弹窗）：
+
+```
+$ log show --last 15m --predicate 'eventMessage CONTAINS "Documents"'
+… AUTHREQ_PROMPTING: service=kTCCServiceSystemPolicyDocumentsFolder, subject=…/venv/bin/python
+```
+
+**做法**：资料库根目录放在非保护目录（例如 `~/资料库`、`~/demo/招投标文档库`）。
+确实想放 `~/Documents`，就把跑服务那个 python 二进制加进「系统设置 → 隐私与安全性 → 完全磁盘访问权限」。
+
+## 九、安全边界（写清楚哪些事做不到）
 
 - 文档里说「审批压不过拉黑、等级不做继承、内容一改自动退回待批、MCP 侧零写能力」——
   这四条都有测试守着（`tests/test_kb.py`）。
