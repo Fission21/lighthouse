@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 灯塔 · 一键验收：起一个临时窗口 → 跑五套测试 → 收拾干净
+# 灯塔 · 一键验收：起一个临时窗口 → 跑六套测试 → 收拾干净
 #
 # 用法: bash tests/run_all_tests.sh [窗口id] [端口]
 #   默认拿注册表里的第一个窗口（示例仓库里是 demo），在 127.0.0.1 上起一份临时实例，
-#   五套测试跑完后自动关掉临时实例、清掉测试件。不需要公网、不需要隧道。
+#   六套测试跑完后自动关掉临时实例、清掉测试件。不需要公网、不需要隧道。
+#   第 6 套（受控资料库）自带隔离环境与自己的服务，同样不碰 windows.json 与 ~/.lighthouse。
 #   第 4 套（提权）与第 5 套（加固）自带隔离环境，不碰 windows.json 与 ~/.lighthouse。
 set -uo pipefail
 
@@ -95,6 +96,7 @@ run "只读审计(45项)"  "$PY" "$HERE/audit_readonly.py" "$URL" "$WROOT"
 run "写开关(25项)"    "$PY" "$HERE/test_write.py"    "$URL" "$WIN" "$WROOT"
 run "提权(56项)"      "$PY" "$HERE/test_elevate.py"
 run "加固(56项)"      "$PY" "$HERE/test_hardening.py"
+run "受控资料库(94项)" "$PY" "$HERE/test_kb.py"
 
 echo
 echo "════════ 结果：$pass 套通过 / $fail 套失败 ════════"

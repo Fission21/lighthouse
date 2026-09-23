@@ -27,6 +27,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -35,6 +36,7 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -357,6 +359,16 @@ _registry = load_registry()
 if WINDOW_ID not in _registry:
     raise SystemExit(f"WINDOW_ID={WINDOW_ID!r} 不在 {REGISTRY_PATH}；可用: {list(_registry)}")
 WIN = Window(WINDOW_ID, _registry[WINDOW_ID])
+
+# ---------------------------------------------------------------- 受控资料库模式（kb / portal）
+# kb 模式：只注册 kb_* 只读工具（不看路径，只看编号 + 等级）。
+KB_MODE = CONF.window_kb_enabled(WIN.cfg)
+PORTAL_MODE = KB_MODE and CONF.window_portal_enabled(WIN.cfg)
+# 谁在调：由门户认证中间件填充（非门户请求恒为 "-"）。审计与报表都靠这几个值。
+PRINCIPAL = contextvars.ContextVar("lighthouse_principal", default="-")
+LEVELS = contextvars.ContextVar("lighthouse_levels", default=None)
+CLIENT_IP = contextvars.ContextVar("lighthouse_client_ip", default="-")
+UA = contextvars.ContextVar("lighthouse_ua", default="")
 AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 
 server = MCPServer(
@@ -391,9 +403,13 @@ def _audit(tool: str, args: dict, ok: bool, extra: dict | None = None) -> None:
         line = {
             "ts": datetime.now(CST).isoformat(timespec="seconds"),
             "window": WIN.id,
+            "principal": PRINCIPAL.get(),
+            "levels": LEVELS.get(),
             "tool": tool,
             "args": {k: (v if not isinstance(v, str) or len(v) < 120 else v[:120] + "…") for k, v in (args or {}).items()},
             "ok": ok,
+            "ip": CLIENT_IP.get(),
+            "ua": (UA.get() or "")[:120],
         }
         if extra:
             line.update(extra)
@@ -444,7 +460,6 @@ def _iter_files(base: Path, depth: int):
 
 
 # ---------------------------------------------------------------- 工具
-@server.tool(description="本窗口的给看范围声明：根目录、include/exclude、上限、可见性。")
 def window_info() -> str:
     _audit("window_info", {}, True)
     summ = WIN.scope_summary()
@@ -459,7 +474,6 @@ def window_info() -> str:
                                  "用户开写开关（lighthouse.sh write <id> on）后可用。")})
 
 
-@server.tool(description="列出窗口范围内的文件（越界/拉黑文件不会出现）。path 为窗口内相对路径，depth 默认 3。")
 def list_files(path: str = "", depth: int = 3) -> str:
     ok, why = WIN.check(path)
     if not ok:
@@ -481,7 +495,6 @@ def list_files(path: str = "", depth: int = 3) -> str:
     return _dump({"window": WIN.id, "path": path or ".", "count": len(files), "files": files})
 
 
-@server.tool(description="读窗口内某文件的行区间（1 起，带行号）。范围外/密钥类文件会被拒；内容里的凭据自动打码。")
 def read_file(path: str, offset: int = 1, limit: int = 200) -> str:
     ok, why = WIN.check(path)
     if not ok:
@@ -518,7 +531,6 @@ def read_file(path: str, offset: int = 1, limit: int = 200) -> str:
     })
 
 
-@server.tool(description="在窗口范围内搜关键词（多关键词=全部命中）。范围外/拉黑文件不会被搜到，命中内容自动打码。")
 def search(keyword: str, limit: int = 20) -> str:
     kws = [k for k in re.split(r"[,，\s]+", keyword or "") if k]
     if not kws:
@@ -573,11 +585,6 @@ def _validate_patterns(include: list[str]) -> tuple[list[str], str]:
     return clean, ""
 
 
-@server.tool(description="【申请】申请扩大本窗口的给看范围（例如从「只能看文档」提到「也能看代码」）。"
-                         "默认只会记成【待批准申请】——agent 无法自我提权，批准权在用户手里；"
-                         "若用户为该窗口开了自动授予策略（或临时预授权窗口），则在授权上限内立即生效；"
-                         "若用户在对话里已明确同意、且窗口开了「对话内授权」，带 user_confirmed=true 再次申请即生效。"
-                         "密钥默认拉黑与 exclude 永远不受影响。")
 def request_access(include: list[str], reason: str = "", user_confirmed: bool = False) -> str:
     clean, bad = _validate_patterns(include)
     if bad:
@@ -719,7 +726,6 @@ def _write_gate(tool: str, path: str) -> tuple[Path | None, str]:
     return target, ""
 
 
-@server.tool(description="【写】写入文件（mode=overwrite 覆盖 / append 追加）。仅在用户打开该窗口写开关后可用；写前自动备份原文件，写后记录前后哈希。")
 def write_file(path: str, content: str, mode: str = "overwrite") -> str:
     if mode not in ("overwrite", "append"):
         return _dump({"error": f"mode 只能是 overwrite / append（收到 {mode!r}）", "window": WIN.id})
@@ -749,7 +755,6 @@ def write_file(path: str, content: str, mode: str = "overwrite") -> str:
                   "bytes": len(data), "sha_before": before, "sha_after": after, "backup": backup})
 
 
-@server.tool(description="【写】对文件做精确替换（old_string→new_string）。默认要求唯一匹配；replace_all=true 才全部替换。受写开关控制，改动前自动备份。")
 def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
     target, err = _write_gate("edit_file", path)
     if err or target is None:
@@ -787,7 +792,6 @@ def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = F
                   "replaced": count if replace_all else 1, "sha_before": before, "sha_after": after, "backup": backup})
 
 
-@server.tool(description="【写】创建目录。受写开关控制。")
 def make_dir(path: str) -> str:
     target, err = _write_gate("make_dir", path)
     if err or target is None:
@@ -801,7 +805,6 @@ def make_dir(path: str) -> str:
     return _dump({"window": WIN.id, "ok": True, "dir": path})
 
 
-@server.tool(description="【写·危险】删除文件。必须先显式 confirm=true；删除前会把原文件备份到日志目录（可找回）。受写开关控制。")
 def delete_file(path: str, confirm: bool = False) -> str:
     if not confirm:
         return _dump({"error": "危险操作：需要显式 confirm=true 才会删除", "window": WIN.id})
@@ -821,6 +824,86 @@ def delete_file(path: str, confirm: bool = False) -> str:
         return _dump({"error": f"删除失败: {e}", "window": WIN.id})
     _audit("delete_file", {"path": path}, True, {"bytes": size, "sha_before": before, "backup": backup})
     return _dump({"window": WIN.id, "ok": True, "deleted": path, "bytes": size, "backup": backup})
+
+
+# ---------------------------------------------------------------- 工具注册
+# kb 模式：只开放 kb_*（不看路径，只看编号 + 等级）；路径型工具**根本不注册** ——
+# 外部 AI 连工具名都看不到，比「注册了再拒绝」少一个洞。写工具保持原样（会被写开关挡住）。
+if KB_MODE:
+    import kb as KB                                              # noqa: N813
+    import kb_access as KBACCESS                                  # noqa: N813
+    KB.register_tools(server, WIN, STATE_ROOT, _audit, _dump, _redact,
+                      levels_getter=LEVELS.get, principal_getter=PRINCIPAL.get)
+else:
+    server.tool(description="本窗口的给看范围声明：根目录、include/exclude、上限、可见性。")(window_info)
+    server.tool(description="列出窗口范围内的文件（越界/拉黑文件不会出现）。path 为窗口内相对路径，depth 默认 3。")(list_files)
+    server.tool(description="读窗口内某文件的行区间（1 起，带行号）。范围外/密钥类文件会被拒；内容里的凭据自动打码。")(read_file)
+    server.tool(description="在窗口范围内搜关键词（多关键词=全部命中）。范围外/拉黑文件不会被搜到，命中内容自动打码。")(search)
+    server.tool(description="【申请】申请扩大本窗口的给看范围。默认只会记成待批准申请 —— agent 无法自我提权，批准权在用户手里。")(request_access)
+    server.tool(description="【写】写入文件（mode=overwrite 覆盖 / append 追加）。仅在用户打开该窗口写开关后可用；写前自动备份原文件，写后记录前后哈希。")(write_file)
+    server.tool(description="【写】对文件做精确替换（old_string→new_string）。默认要求唯一匹配；replace_all=true 才全部替换。受写开关控制，改动前自动备份。")(edit_file)
+    server.tool(description="【写】创建目录。受写开关控制。")(make_dir)
+    server.tool(description="【写·危险】删除文件。必须先显式 confirm=true；删除前会把原文件备份到日志目录（可找回）。受写开关控制。")(delete_file)
+
+
+def _client_ip(scope, hdrs: dict) -> str:
+    """客户端 IP：过隧道时 cloudflared 会带 CF-Connecting-IP（本机直连没有）。"""
+    return hdrs.get("cf-connecting-ip") or (scope.get("client") or ("-", 0))[0] or "-"
+
+
+class _KbAuth:
+    """门户认证：地址段三选一 —— Authorization: Bearer / ?token= / 路径别名 /kb-<地址段>。
+
+    为什么必须有「路径别名」：ChatGPT 网页连接器创建应用时只能填 URL（没有自定义 header 输入框），
+    所以每个人的地址要能直接当 URL 用。别名请求会被重写成窗口真实的 MCP 路径后继续处理。
+    未授权一律 401；每次请求现读记录 → 停用/收回/换地址/到期立即生效。
+    """
+
+    def __init__(self, inner, wid, state_root, real_path):
+        self.inner, self.wid, self.state_root, self.real_path = inner, wid, state_root, real_path
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.inner(scope, receive, send)
+        hdrs = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
+        qs = parse_qs(scope.get("query_string", b"").decode(errors="replace"))
+        token = ""
+        auth = hdrs.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+        elif qs.get("token"):
+            token = qs["token"][0].strip()
+        else:
+            path = scope.get("path", "")
+            m = re.match(r"^/kb-([A-Za-z0-9_\-]{16,})/?$", path)
+            if m:
+                token = m.group(1)
+                scope = {**scope, "path": self.real_path}
+            elif path.rstrip("/") != self.real_path.rstrip("/"):
+                # 不是 MCP 端点本身（申请页 / 管理页 / 健康检查…）→ 交给网页层自己把关：
+                # 管理页有管理令 + 只允许部署机直连，申请页本来就该公开。
+                return await self.inner(scope, receive, send)
+        if not token:
+            # 浏览器直接打开窗口地址 → 放行给落地页（那里没有任何资料，只有一句说明）
+            acc, ua = hdrs.get("accept", ""), hdrs.get("user-agent", "")
+            if "text/event-stream" not in acc and ("text/html" in acc or "Mozilla" in ua):
+                return await self.inner(scope, receive, send)
+        rec, err = KBACCESS.check_token(self.state_root, self.wid, token)
+        if err:
+            _audit("auth", {"path": scope.get("path", "")}, False,
+                   {"reason": err, "note": "未授权请求", "ip": _client_ip(scope, hdrs)})
+            body = json.dumps({"error": "未授权", "detail": err}, ensure_ascii=False).encode()
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json; charset=utf-8"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        PRINCIPAL.set(rec.get("person") or "-")
+        LEVELS.set(list(rec.get("levels") or []))
+        CLIENT_IP.set(_client_ip(scope, hdrs))
+        UA.set(hdrs.get("user-agent", ""))
+        KBACCESS.touch(self.state_root, self.wid, rec["person"])
+        await self.inner(scope, receive, send)
 
 
 if __name__ == "__main__":
@@ -846,6 +929,11 @@ if __name__ == "__main__":
     landing = (f"✅ 灯塔窗口「{WIN.id}」在运行 —— 这里是给 AI 客户端用的 MCP 接口，浏览器里没有页面可看。\n"
                f"你看到这段话 = 这台机器已经连通、服务正常。\n"
                f"客户端连接地址: http://<主机地址>:{WIN.port}{WIN.path}（本机用 127.0.0.1，局域网用你的内网 IP）\n")
+    if PORTAL_MODE:
+        landing += (f"\n这是受控资料库窗口：\n"
+                    f"  · 同事自助申请：http://<主机地址>:{WIN.port}{WIN.path}/request\n"
+                    f"  · 管理页（维护者）：http://127.0.0.1:{WIN.port}{WIN.path}/admin?k=<管理令>"
+                    f"（跑 `bash lighthouse.sh kb admin-url {WIN.id}` 拿完整地址）\n")
 
     class _BrowserLanding:
         """浏览器直接访问窗口地址时回一句人话；MCP 客户端（带 text/event-stream 的）请求原样放行。"""
@@ -854,7 +942,9 @@ if __name__ == "__main__":
             self.inner = inner
 
         async def __call__(self, scope, receive, send):
-            if scope.get("type") == "http" and scope.get("method") in ("GET", "HEAD"):
+            if (scope.get("type") == "http" and scope.get("method") in ("GET", "HEAD")
+                    and scope.get("path", "").rstrip("/") == WIN.path.rstrip("/")):
+                # 只拦窗口根路径：/request、/admin 这些门户页要留给网页层（浏览器点进去才有内容）
                 hdrs = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
                 acc, ua = hdrs.get("accept", ""), hdrs.get("user-agent", "")
                 if "text/event-stream" not in acc and ("text/html" in acc or "Mozilla" in ua):
@@ -866,5 +956,10 @@ if __name__ == "__main__":
                     return
             await self.inner(scope, receive, send)
 
+    if PORTAL_MODE:
+        import kb_web
+        app = kb_web.mount(app, WIN, STATE_ROOT, _audit)
+    if KB_MODE:
+        app = _KbAuth(app, WIN.id, STATE_ROOT, WIN.path)
     import uvicorn
     uvicorn.run(_BrowserLanding(app), host=bind, port=WIN.port)

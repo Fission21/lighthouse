@@ -134,7 +134,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13   ✅ 只读审计 46/46   ✅ 写开关 25/25   ✅ 提权 56/56   ✅ 加固 49/49
+#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 94/94
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -215,9 +215,38 @@ bash lighthouse.sh lan <id> on|off|status            # 局域网直连：同网�
 bash lighthouse.sh json-response <id> on|off|status  # POST 回应改纯 JSON（给不吃 SSE 的隧道/客户端；默认 SSE）
 bash lighthouse.sh relay <id> on|off|status   # 公网 IP 直连：挂到你的服务器 IP:端口（ssh -R 反向隧道，不用域名）
 bash lighthouse.sh deny <id>             # 收回全部提权
+bash lighthouse.sh kb scan <id> [--extract auto|none|mineru]   # 受控资料库：扫目录抽文本、登记待批
+bash lighthouse.sh kb approve <id> --all-pending --level L1-商务  # 按篇审批 + 定等级
+bash lighthouse.sh kb invite <id> --name 张三 --level "L2-技术" --out 张三-使用说明.md
+bash lighthouse.sh kb users <id>          # 谁在用、调用/被拒次数、最后活跃
+bash lighthouse.sh kb usage <id> --days 7 # 谁读了哪篇（也可 --by doc / --csv）
+bash lighthouse.sh kb admin-url <id>      # 管理页 + 同事申请页地址
 bash lighthouse.sh test [id]             # 一键验收
 bash lighthouse.sh doctor                # 体检：解释器 / 依赖 / 隧道 / 配置
 ```
+
+## 受控资料库：把资料按等级发给同事（一人一条地址）
+
+团队里总有人需要某几份文档。与其把文件夹整个发出去，不如开一扇**资料库窗口**：
+同事用自己的 AI 客户端连上你发的地址，只能看到**你审批过**的资料，而且看得到哪几档由你定。
+
+```bash
+bash lighthouse.sh kb init bidkb                       # 建资料库骨架
+# 把资料放进 ~/Documents/招投标文档库/原始文档/…
+bash lighthouse.sh kb scan bidkb                       # 抽文本、登记待批
+bash lighthouse.sh kb approve bidkb --all-pending --level L1-商务
+bash lighthouse.sh kb invite bidkb --name 张三 --level "L2-技术" --out 张三-使用说明.md
+```
+
+- **一人一条地址**：权限挂在那条地址上；改等级不用换地址，`rotate` 才换（旧地址立即失效）。
+- **等级你定**（默认「商务 / 技术 / 核心」）：不做继承，要包含就显式列。
+- **全程可追踪**：每条调用记「谁 / 他的等级 / 读了哪篇 / 客户端 IP / 时间 / 成没成」，
+  被拒的越级尝试也记；`kb usage` 出报表。
+- **网页自助**：同事在 `…/request` 自己填申请（商务档可配成自动放行），
+  你在 `…/admin` 批（默认只允许在部署机上打开，要手机批就把 `portal.admin_remote` 打开）。
+- **MCP 侧零写能力**：资料库窗口只注册四个只读工具，路径型与写工具根本不注册。
+
+细节（配置项、审计字段、安全边界）见 [docs/KB.md](docs/KB.md)。
 
 ## 对话里提权：想看更多，谁说了算
 

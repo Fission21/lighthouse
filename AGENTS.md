@@ -27,6 +27,16 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 5. **开窗必须先问范围**：`add_window.py` 在没给 `--include/--preset` 时必须交互询问，
    非交互环境要报错退出——**不许静默默认 `**/*`**。范围是用户的决定，不是工具的默认值。
 
+## 资料库模式（kb）的四条补充铁律
+
+1. **只注册 `kb_*` 四个只读工具**：kb 模式下路径型（list_files/read_file/search）与写工具
+   **根本不注册** —— 外部 AI 连工具名都看不到，比「注册了再拒绝」少一个洞。
+2. **篇级闸门顺序固定**：未批准 → 等级不符 → include/exclude/拉黑 → 越界 → 原文件哈希变了 → 文本缺失；
+   任何一步不过就拒。**审批与等级都覆盖不了默认拉黑**，等级也**不做继承**（要包含就显式列）。
+3. **只有维护者侧能改「公开 / 授权」**：CLI 与管理页可以，MCP 工具一个都没有；台账或同事记录坏掉 → 一律拒。
+4. **一人一条地址**：令牌是 URL 的一部分（网页版 AI 只能填 URL，没有自定义 header 输入框），
+   改权限不换地址、`rotate` 才换；管理令 `adm_` 前缀与同事地址互不通用。
+
 ## 关键约定
 
 - **发现问题先记 `docs/ISSUES.md`**：`bash lighthouse.sh issue "标题" --area 模块 --sev 中 --detail "现象/证据"`。
@@ -65,4 +75,10 @@ bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开
 | `core/render_services.py` | launchd / systemd 服务定义生成 |
 | `core/render_ingress.py` | 隧道 ingress 生成（路径分流） |
 | `core/switch.py` | 写开关 CLI |
+| `core/kb.py` | 受控资料台账（篇级审批 + 等级闸门 + 只读工具注册；台账坏 = 全拒） |
+| `core/kb_access.py` | 同事记录：一人一条地址、等级与有效期、停用/换地址、用量计数 |
+| `core/kb_web.py` | 门户网页：申请页 / 查进度 / 管理页（管理令 + 默认只允许部署机直连） |
+| `core/kb_usage.py` | 审计聚合报表（按人 / 天 / 篇 / 工具） |
+| `core/kb_ingest.py` | 抽文本（MinerU → pdftext / textutil），失败**不许**标成可读 |
+| `core/kb_cli.py` | `lighthouse.sh kb` 的实现（台账 / 地址 / 申请 / 用量） |
 | `tests/*` | 五套测试（冒烟 / 只读审计 / 写开关 / 提权 / 加固）+ 一键验收 |

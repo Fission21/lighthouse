@@ -30,6 +30,20 @@
 #   scope <id>                              看当前授权状态（含常驻策略）
 #   issue "标题" [--area 模块] [--sev 高|中|低] [--detail "现象"]
 #                                           记一条问题到 docs/ISSUES.md（不改代码也能攒问题）
+#   kb <子命令> [参数]        受控资料库（台账 / 同事地址 / 申请 / 用量）：
+#     scan <窗> [--extract auto|none|mineru] [--yes]     扫目录、抽文本、登记待批
+#     pending|list|show <窗>                              看台账
+#     approve <窗> <doc_id|--all-pending|--category X> [--level L] [--yes]
+#     reject <窗> <doc_id> [--reason "…"] | reindex <窗>   审批 / 内容变更后重抽
+#     requests <窗> [--pending]                           看同事的申请
+#     decide <窗> <申请号> --approve --level L [--for 30d] | --deny [--reason "…"]
+#     users <窗> | grant <窗> --name 张三 --level "L2-技术" [--for 30d]
+#     set-level <窗> --name 张三 --level "L2-技术"         改等级（地址不变）
+#     rotate <窗> --name 张三 | revoke <窗> --name 张三 [--enable]
+#     invite <窗> --name 张三 --out 文件.md                发放 + 生成一页使用说明
+#     notify <窗> [--ack] [--json]                         新申请（给 agent 汇报用）
+#     usage <窗> [--days 7] [--by person|day|doc|tool] [--csv]
+#     admin-url <窗>                                      管理页地址（本机打开）
 #   test [id]            一键验收（起临时实例跑五套测试，不需要公网）
 #   doctor               体检：解释器 / mcp 依赖 / cloudflared / 配置
 set -uo pipefail
@@ -742,6 +756,11 @@ PYEOF
     mins="${3:-}"
     if [ -n "$mins" ]; then exec "$PY" "$CORE/switch.py" set "$id" "$state" "$mins"; fi
     exec "$PY" "$CORE/switch.py" set "$id" "$state"
+    ;;
+
+  kb)
+    shift
+    exec "$PY" "$CORE/kb_cli.py" "$@"
     ;;
 
   test)

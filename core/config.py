@@ -153,6 +153,70 @@ def window_json_response(cfg: dict) -> bool:
     return cfg.get("json_response") is True
 
 
+def window_kb_enabled(cfg: dict) -> bool:
+    """受控资料库模式：只注册 kb_* 只读工具，路径型工具一律不注册。默认关（fail-closed）。"""
+    kb = cfg.get("kb")
+    return isinstance(kb, dict) and kb.get("enabled") is True
+
+
+def window_kb_docs_dir(cfg: dict) -> str:
+    kb = cfg.get("kb")
+    return (kb.get("docs_dir") if isinstance(kb, dict) else None) or "原始文档"
+
+
+def window_kb_levels(cfg: dict) -> list[str]:
+    """本窗允许的等级清单（顺序 = 从低到高展示）。空 = 未配置 → 读侧一律拒（fail-closed）。"""
+    kb = cfg.get("kb")
+    raw = kb.get("levels") if isinstance(kb, dict) else None
+    return [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
+
+
+def window_kb_default_level(cfg: dict) -> str:
+    kb = cfg.get("kb") or {}
+    d = str(kb.get("default_level") or "").strip()
+    return d if d in window_kb_levels(cfg) else (window_kb_levels(cfg)[0] if window_kb_levels(cfg) else "")
+
+
+def _portal(cfg: dict) -> dict:
+    kb = cfg.get("kb") or {}
+    p = kb.get("portal")
+    return p if isinstance(p, dict) else {}
+
+
+def window_portal_enabled(cfg: dict) -> bool:
+    """门户（申请页 + 管理页）是否开启。"""
+    return window_kb_enabled(cfg) and _portal(cfg).get("enabled") is True
+
+
+def window_portal_public_levels(cfg: dict) -> list[str]:
+    """申请页允许填写的等级（其余等级只能由维护者手动发放）。默认 = 最低一档。"""
+    raw = _portal(cfg).get("public_levels")
+    lv = window_kb_levels(cfg)
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x) in lv]
+    return lv[:1]
+
+
+def window_portal_auto_levels(cfg: dict) -> list[str]:
+    """**申请即通过**的等级（自动发放地址，不用人批）。
+
+    默认空 = 全都要人工批。用户显式写了才自动 —— 自动档不能超出 public_levels。
+    """
+    raw = _portal(cfg).get("auto_approve_levels")
+    pub = window_portal_public_levels(cfg)
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if str(x) in pub]
+
+
+def window_portal_admin_remote(cfg: dict) -> bool:
+    """管理页是否允许从公网（隧道）访问。默认否 = 仅部署机本机直连。
+
+    打开后管理页靠管理令保护（令牌）；手机上要看申请就开这个。
+    """
+    return _portal(cfg).get("admin_remote") is True
+
+
 def lan_ip() -> str:
     """本机在当前网络里的局域网 IP（取不到返回空串）。"""
     import socket
