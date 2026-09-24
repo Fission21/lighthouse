@@ -1407,7 +1407,13 @@ class _Portal:
                                                     self.base), 400)
             base_dir.mkdir(parents=True, exist_ok=True)
             for uf in files:
-                target, why = self._safe_rel(uf.filename, base_dir if cat is None else base_dir)
+                rel_name = uf.filename or ""
+                if cat:
+                    # 文件夹上传常把顶层目录名也带上：跟分类同名就别再套一层
+                    head, _, tail = rel_name.partition("/")
+                    if tail and head.strip() == cat.strip():
+                        rel_name = tail
+                target, why = self._safe_rel(rel_name, base_dir)
                 if target is None:
                     lines.append("⛔ " + esc(uf.filename) + "：" + esc(why))
                     continue
