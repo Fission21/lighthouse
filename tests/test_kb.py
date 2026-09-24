@@ -881,7 +881,7 @@ async def part_users(site: str, state: Path, zhang: dict):
     st, body = http(f"{base}/admin?k={admin}")
     check("同事区一行就能改（有勾选框、有效期、保存按钮）",
           st == 200 and 'name="levels"' in body and "能看哪些等级（可多选）" in body
-          and "换新地址" in body and "看地址" in body)
+          and "更换地址" in body and "看地址" in body)
     check("同事行里能看到地址（带复制按钮）", "/kb-" in body and "已复制" in body)
 
     async def can_read(did):
