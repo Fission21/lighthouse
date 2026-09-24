@@ -142,8 +142,8 @@ On the web-AI side you also need: a ChatGPT account with Developer mode enabled 
 pip install mcp
 
 # 1) Spin up the sample window and verify the whole chain (no internet needed)
-bash lighthouse.sh test            # temp instance → five suites → auto cleanup
-#    ✅ smoke 13/13   ✅ read-only audit 46/46   ✅ write switch 25/25   ✅ elevation 56/56   ✅ hardening 49/49
+bash lighthouse.sh test            # temp instance → all suites (incl. doc consistency) → auto cleanup
+#    ✅ smoke  ✅ read-only audit  ✅ write switch  ✅ elevation  ✅ hardening  ✅ kb library  ✅ doc consistency
 
 # 2) Open a window onto YOUR project
 #    Without a scope it will ASK you how much to expose — it never defaults to "everything"
@@ -221,7 +221,7 @@ bash lighthouse.sh lan <id> on|off|status            # LAN direct: reach it at h
 bash lighthouse.sh json-response <id> on|off|status  # plain-JSON replies for tunnels/clients that can't do SSE
 bash lighthouse.sh relay <id> on|off|status   # public-IP direct: hang it on your server's IP:port via ssh -R (no domain)
 bash lighthouse.sh deny <id>             # revoke every elevation at once
-bash lighthouse.sh test [id]             # the five suites
+bash lighthouse.sh test [id]             # all suites
 bash lighthouse.sh doctor                # interpreter / deps / tunnel / config check
 ```
 
@@ -277,7 +277,7 @@ lighthouse/
 ├── windows.json         # window registry: the visible scope of every window lives here
 ├── core/                # server.py(window MCP server) · config.py · scope.py(authorization) · add_window.py
 │                        #   render_services.py · render_ingress.py · switch.py(write switch CLI)
-├── tests/               # five suites (smoke 13 / audit 46 / write 25 / elevation 56 / hardening 56) + run_all_tests.sh
+├── tests/               # all suites (smoke / audit / write / elevation / hardening / kb library / doc consistency) + run_all_tests.sh
 ├── demo/project/        # sample project (with a pass phrase, proving reads are real)
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```

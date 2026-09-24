@@ -7,6 +7,24 @@
 Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 AI 读的工具。
 四道闸（根界 / exclude / include / 默认拉黑）+ 输出脱敏 + 审计 + 写开关。
 
+## 按任务读取
+
+只读与本次改动相关的文档，不递归加载；多个条件命中时合并范围，已读且未变化的不重复读。
+
+| 任务 | 必读入口 |
+|---|---|
+| 改闸门、脱敏、写、提权 | 本文件「五条铁律」+ [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| 需求设计、交付与验收 | [`docs/rules/delivery.md`](docs/rules/delivery.md)（功能设计与交付流程） |
+| 改门户页面、颜色、间距、组件 | [`docs/DESIGN.md`](docs/DESIGN.md) |
+| 受控资料库（kb 模式、门户、下载、台账） | [`docs/KB.md`](docs/KB.md) |
+| 开窗范围、目录与文件夹 | [`docs/OPEN_A_WINDOW.md`](docs/OPEN_A_WINDOW.md)、[`docs/FOLDERS.md`](docs/FOLDERS.md) |
+| 安全模型、「防不了什么」 | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| 接外部 AI（ChatGPT 连接器等） | [`docs/CHATGPT.md`](docs/CHATGPT.md) |
+| 长期决策与取代关系 | [`decisions/INDEX.md`](decisions/INDEX.md) |
+| 已知问题与历史坑 | [`docs/ISSUES.md`](docs/ISSUES.md) |
+| 路线与版本 | [`docs/ROADMAP.md`](docs/ROADMAP.md)、[`CHANGELOG.md`](CHANGELOG.md) |
+| 提交、PR、开源规范 | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
 ## 五条铁律（改代码时必须保持）
 
 1. **fail-closed**：任何判定失败（路径解析异常、正则异常、说不清）→ 拒绝 + 记审计。
@@ -66,7 +84,7 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 ## 改完必须做的验证
 
 ```bash
-bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开关 25 / 提权 56 / 加固 56，必须全绿
+bash tests/run_all_tests.sh      # 全部套件：通用冒烟 / 只读审计 / 写开关 / 提权 / 加固 / 受控资料库 / 文档一致性，必须全绿（各项数量由脚本实时输出）
 ```
 
 任何安全相关的改动（闸门、脱敏、写路径、提权）都要补一条测试——测试套件是这个项目的安全承诺书。
@@ -90,4 +108,4 @@ bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开
 | `core/kb_cli.py` | `lighthouse.sh kb` 的实现（台账 / 地址 / 申请 / 用量） |
 | `core/kb_download.py` | 下载层：门户下载页数据、限时签名链接（HMAC）、zip 打包 |
 | `core/kb_ingest.py` | 抽取（textutil/MinerU/pdftotext）+ `scan_library()` 扫库（CLI 与网页共用） |
-| `tests/*` | 五套测试（冒烟 / 只读审计 / 写开关 / 提权 / 加固）+ 一键验收 |
+| `tests/*` | 全部套件（通用冒烟 / 只读审计 / 写开关 / 提权 / 加固 / 受控资料库 / 文档一致性）+ 一键验收 |

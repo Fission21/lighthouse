@@ -102,7 +102,7 @@ bash lighthouse.sh url myproj --public     # 打印 https://<域名>/<窗口路�
 ```text
 改 ~/demo/lighthouse 之前先读 AGENTS.md 的五条铁律（fail-closed、默认拉黑不可关、
 写权限两级锁、提权默认需你批准、开窗必须先问范围），改完必须：
-bash tests/run_all_tests.sh     # 五套（13/46/25/56/56）必须全绿
+bash tests/run_all_tests.sh     # 全部套件必须全绿（数量由脚本实时输出）
 任何安全相关改动都要补一条测试。改完汇报：改了什么、测试结果、有没有破坏既有行为。
 ```
 

@@ -15,7 +15,7 @@ export LIGHTHOUSE_PY="$PWD/.venv/bin/python"            # 测试脚本用它起�
 bash lighthouse.sh test                                 # 全量验收，必须全绿
 ```
 
-- `bash lighthouse.sh test` 会跑 6 套共 400+ 项断言，其中「受控资料库」那套自带隔离环境
+- `bash lighthouse.sh test` 会跑全部套件（各项数量由脚本实时输出），其中「受控资料库」那套自带隔离环境
   （临时目录 + 自己的服务进程 + 假资料库），不会碰你的真实配置。
 - 只改了一部分时也可以单跑：`$LIGHTHOUSE_PY tests/test_kb.py`（受控资料库）、
   `$LIGHTHOUSE_PY tests/test_audit.py` 等。
@@ -70,8 +70,9 @@ core/            服务与工具实现
   config.py        全局配置与窗口注册表
   theme.py         设计令牌与配色主题
   kb_*.py          受控资料库（台账 / 门户 / 认证 / 邀请码 / 下载 / 用量 / CLI）
-tests/           6 套验收脚本（纯 Python，无 pytest 依赖）
-docs/            KB.md（受控资料库手册）、DESIGN.md（设计规范）等
+tests/           全部套件（纯 Python，无 pytest 依赖；含文档一致性检查 check_docs.py）
+docs/            KB.md（受控资料库手册）、DESIGN.md（设计规范）、rules/delivery.md（交付流程）等
+decisions/       架构决策记录（ADR）+ INDEX.md 索引
 lighthouse.sh    统一入口（起服务、测试、publish、kb 子命令）
 ```
 

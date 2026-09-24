@@ -133,8 +133,8 @@ $ tail -5 ~/.lighthouse/audit/miji.jsonl          # 真实输出，时间戳与�
 pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
-bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 288/288
+bash lighthouse.sh test            # 一键验收：起临时实例 → 跑全部套件（含文档一致性）→ 自动收拾
+#    ✅ 通用冒烟 ✅ 只读审计 ✅ 写开关 ✅ 提权 ✅ 加固 ✅ 受控资料库 ✅ 文档一致性（各项数量由脚本实时输出）
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -322,7 +322,7 @@ lighthouse/
 ├── windows.json         # 窗口注册表：每扇窗的给看范围只写在这里
 ├── core/                # server.py(窗口服务) · config.py · scope.py(授权) · add_window.py(开窗)
 │                        #   render_services.py(服务定义) · render_ingress.py(隧道分流) · switch.py(写开关)
-├── tests/               # 五套测试（冒烟 13 / 审计 46 / 写开关 25 / 提权 56 / 加固 56）+ run_all_tests.sh
+├── tests/               # 全部套件（冒烟 / 审计 / 写开关 / 提权 / 加固 / 受控资料库 / 文档一致性）+ run_all_tests.sh
 ├── demo/project/        # 示例项目（含验证口令，用来证明"真的读到了本地"）
 └── docs/                # ARCHITECTURE · SECURITY · CHATGPT · OPEN_A_WINDOW · ROADMAP · ISSUES
 ```
