@@ -252,6 +252,13 @@ def cleanup(window: str) -> str:
     for t in _trash_names(window):
         if STALE in t:
             out.append(_cli(window, "trash", "--purge", t)[-60:])
+    # 台账里没有的空文件夹也要清：建完还没放东西就被中断的那次，只会留在磁盘上
+    import shutil
+    lib = Path.home() / "demo" / "招投标文档库" / "原始文档"
+    for d in sorted(lib.glob(STALE + "*"), reverse=True):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            out.append(f"清掉残留文件夹 {d.name}")
     return " ｜ ".join(x for x in out if x)
 
 
