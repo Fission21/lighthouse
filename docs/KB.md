@@ -237,6 +237,11 @@ bash lighthouse.sh kb accounts bidkb                                  # 谁有�
 
 ## 四·九、邀请码（同事自助注册，一问就知道是谁）
 
+> **别删的东西**：管理员密码存在 `~/.lighthouse/state/admin-password.txt`（只有你这台机器能读，权限 600）。
+> 桌面有快捷方式「资料库-管理员密码.txt」直达它。丢了密码就 `bash lighthouse.sh kb passwd bidkb --admin`
+> 重设一个（旧的立刻作废）；`kb passwd bidkb --delete --user <名>` 删同事账号。
+
+
 **注册必须凭邀请码**，码只能由维护者生成 —— 这样每个同事的来源都可追溯：
 
 ```
