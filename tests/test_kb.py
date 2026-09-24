@@ -89,12 +89,17 @@ def http(url: str, data: dict | None = None, headers: dict | None = None,
         return e.code, e.read().decode("utf-8", errors="replace")
 
 
-def login(base_url: str, user: str, pw: str, remember: bool = False) -> tuple[int, str]:
-    """登录，并把会话 cookie 记为默认（之后所有 http() 都带上）。"""
+def login(base_url: str, user: str, pw: str, remember: bool = False,
+          entry: str = "member") -> tuple[int, str]:
+    """登录，并把会话 cookie 记为默认（之后所有 http() 都带上）。
+
+    entry="member" 走同事入口 /login（默认）；entry="admin" 走管理入口 /admin/login。
+    两个入口共用一套账号，但会互相拦（走错门 → 401 + 指路），所以管理员必须走管理入口。
+    """
     body = f"user={quote(user)}&pw={quote(pw)}&next={quote(base_url.rstrip('/') + '/admin')}"
     if remember:
         body += "&remember=1"
-    req = Request(base_url + "/login", data=body.encode(),
+    req = Request(base_url + ("/admin/login" if entry == "admin" else "/login"), data=body.encode(),
                   headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urlopen(req, timeout=15) as r:
@@ -399,7 +404,7 @@ def part_web(base_url: str, state: Path, admin_pw: str = ""):
     check("同事申请不能顶别人的名字（姓名字段被忽略）",
           any(r["name"] == "赵六" and r.get("dept") == "冒名" for r in _d["requests"].values()),
           str([r["name"] for r in _d["requests"].values()]))
-    login(base_url, "admin", admin_pw)          # 后面的申请流程用管理员身份（可代填姓名）
+    login(base_url, "admin", admin_pw, entry="admin")   # 管理入口；后面流程用管理员身份（可代填姓名）
     _keep_session = SESSION["cookie"]           # 段末要清掉：后面的段测的是匿名/地址边界
     req_url = f"{base_url}/request"
     st, body = http(req_url)
@@ -1182,11 +1187,11 @@ async def part_auth(site: str, state: Path, admin_pw: str):
           st == 401 and "用户名或密码不对" in body, f"HTTP {st}")
     for _ in range(4):
         login(site + "/w-kb1-test", "admin", "definitely-wrong")
-    st, body = login(site + "/w-kb1-test", "admin", admin_pw)
+    st, body = login(site + "/w-kb1-test", "admin", admin_pw, entry="admin")
     check("连错 5 次 → 锁定（正确的密码也先不让进）",
           st == 401 and "连错太多次" in body, body[:80])
     AUTH.set_account(state, "admin", role="admin", password=admin_pw, person="管理员")   # 解锁（等价于重置）
-    st, body = login(site + "/w-kb1-test", "admin", admin_pw)
+    st, body = login(site + "/w-kb1-test", "admin", admin_pw, entry="admin")
     check("重置后再登录 → 成功", st == 200 and "登录成功" in body, f"HTTP {st}")
     check("登录后拿到的是签名 cookie（HttpOnly/SameSite）",
           SESSION["cookie"].startswith("lh_sess="), SESSION["cookie"][:20])
@@ -1218,6 +1223,33 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = http(f"{base}/files")
     check("同事登录后能看资料页（只列他等级的）", st == 200 and "我的资料" in body, f"HTTP {st}")
     check("资料页里只有他有权限的等级", "L2-技术" not in body or "无权" in body, "")
+
+    # ---- 两个入口分开：同事走 /login，管理员走 /admin/login ----
+    SESSION["cookie"] = ""
+    st, body = http(f"{base}/login", cookie="")
+    check("同事登录页：有注册入口、不提「管理员入口」",
+          st == 200 and "在这里注册" in body and "管理员入口" not in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin/login", cookie="")
+    win = base.split(site)[-1]                      # 页面里的链接是窗口相对路径（如 /w-kb1-test）
+    check("管理员登录页：独立 URL、写明「管理员入口」、不放注册入口",
+          st == 200 and "管理员入口" in body and "在这里注册" not in body
+          and f'action="{win}/admin/login"' in body, f"HTTP {st}")
+    check("管理员登录页给了「同事走普通登录」的引导",
+          st == 200 and f'href="{win}/login"' in body, "")
+    st, body = login(site + "/w-kb1-test", "admin", admin_pw)          # 管理员走同事入口
+    check("管理员账号走同事入口 → 拦下并指到管理入口",
+          st == 401 and "同事入口" in body and "/admin/login" in body, f"HTTP {st}")
+    check("走错门不签发会话（页面仍是没登录态）", SESSION["cookie"] == "", f"cookie={SESSION['cookie'][:12]}")
+    st, body = login(site + "/w-kb1-test", "logintester", pw2, entry="admin")   # 同事走管理入口
+    check("同事账号走管理入口 → 拦下并指到普通入口",
+          st == 401 and "管理员入口" in body and "同事账号" in body, f"HTTP {st}")
+    check("走错门不签发会话（同事也一样）", SESSION["cookie"] == "", "")
+    st, body = login(site + "/w-kb1-test", "logintester", pw2)          # 同事走对门
+    check("同事走对门 → 正常登录", st == 200 and "登录成功" in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin/login", cookie="")
+    check("已登录的同事打开管理员登录页也不给管理页（会让他先退出）",
+          st in (200, 401, 403) and "管理员入口" in body, f"HTTP {st}")
+    login(site + "/w-kb1-test", "admin", admin_pw, entry="admin")       # 换回管理员，后面还要用
 
     # ---- 登出 ----
     st, body = http(f"{base}/logout")

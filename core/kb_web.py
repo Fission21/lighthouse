@@ -272,9 +272,33 @@ def status_chip(status: str) -> str:
 
 
 # ---------------------------------------------------------------- 页面
-def page_login(base: str, nxt: str, msg: str = "", user: str = "") -> bytes:
+def page_login(base: str, nxt: str, msg: str = "", user: str = "", mode: str = "member") -> bytes:
+    """登录页。**两个入口是分开的**（2026-09-24 用户要求）：
+
+    · mode="member"（`/login`）—— 同事入口：有注册入口、有找回密码说明
+    · mode="admin"（`/admin/login`）—— 管理员入口：只给维护者，不放注册/申请入口
+
+    两个入口共用同一套账号与会话；分开只是为了让"该走哪个门"一眼看清，
+    并且互相引导（管理员账号在同事页登录会被拦下并给出管理入口）。
+    """
+    if mode == "admin":
+        body = f"""{msg}
+<p class="lead">**管理员入口**。只有这台机器/这个资料库的维护者能进。</p>
+<form method="post" action="{esc(base)}/admin/login">
+  <input type="hidden" name="next" value="{esc(nxt)}">
+  <label>管理员用户名</label><input name="user" maxlength="40" value="{esc(user)}" autofocus required>
+  <label>密码</label><input type="password" name="pw" required>
+  <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:400">
+    <input type="checkbox" name="remember" value="1" style="width:16px;height:16px"> 记住我（30 天）</label>
+  <button type="submit">登录管理页</button>
+  <span class="hint" style="margin-left:8px">连错 5 次会锁 10 分钟</span>
+</form>
+<p class="hint">忘记管理员密码？在这台机器上执行
+<code>bash lighthouse.sh kb passwd &lt;窗口&gt; --admin</code> 重设（旧的立刻作废）。</p>
+<p class="hint">你是来查资料的同事？<a class="minor" href="{esc(base)}/login">走普通登录</a>。</p>"""
+        return _page("管理员登录", body, base)
     body = f"""{msg}
-<p class="lead">这是一个内部资料库。请用**管理员给你的账号**登录；AI 助手那条线不受影响，
+<p class="lead">这是一个内部资料库。请用**维护者给你的账号**登录；AI 助手那条线不受影响，
 继续用你那条专属地址就行。</p>
 <form method="post" action="{esc(base)}/login">
   <input type="hidden" name="next" value="{esc(nxt)}">
@@ -1180,9 +1204,11 @@ class _Portal:
         """没登录：页面请求就跳到登录页，接口请求回 401。"""
         if method == "GET" and sub in ("/request", "/files", "/admin", "/admin/usage", "/"):
             nxt = self.base + sub
+            door = "/admin/login" if sub.startswith("/admin") else "/login"
+            word = "管理员登录" if sub.startswith("/admin") else "去登录"
             return await self._send(send, _page("请先登录", f'<div class="warn">这个页面需要登录。</div>'
-                                                    f'<p><a class="btn" href="{esc(self.base)}/login?next='
-                                                    f'{esc(nxt)}">去登录</a></p>', self.base), 401)
+                                                    f'<p><a class="btn" href="{esc(self.base)}{door}?next='
+                                                    f'{esc(nxt)}">{word}</a></p>', self.base), 401)
         return await self._send(send, _page("请先登录", '<div class="warn">需要登录后才能用这个地址。</div>',
                                             self.base), 401)
 
@@ -1203,13 +1229,22 @@ class _Portal:
                        {"actor": (self._sess or {}).get("user") or "-", "ip": ip})
             raw = str((qs.get("next") or [""])[0] or "")
             nxt = self._fix_next(raw, "") if raw else ""
-            link = self.base + "/login" + (f"?next={quote(nxt)}" if nxt else "")
+            door = "/admin/login" if nxt.startswith("/admin") else "/login"
+            link = self.base + door + (f"?next={quote(nxt)}" if nxt else "")
             who = (self._sess or {}).get("user") or "当前账号"
             return await self._send(send, _page("已退出", f'<div class="ok">已退出登录（{esc(str(who))}）。</div>'
                                                             f'<p><a class="btn" href="{esc(link)}">'
                                                             '重新登录</a></p>', self.base),
                                     200, cookie=AUTH.clear_cookie())
 
+        want_admin = sub == "/admin/login"          # 管理入口：只认管理员账号
+        if want_admin:
+            why = self._admin_net_block({"client": (self._ip, 0)}, hdrs)
+            if why:                                  # 管理入口跟管理页同一套网络准入
+                self.audit("portal_admin", {"path": sub}, False, {"reason": why, "ip": self._ip})
+                return await self._send(send, _page("管理员登录",
+                                                    f'<div class="warn">{esc(why)}</div>', self.base),
+                                        403 if "公网" in why else 401)
         if method == "GET":
             if not AUTH.has_admin(self.state_root):
                 boot = ('<div class="warn">还没有管理员账号。请在部署机上执行：<br><code>'
@@ -1217,8 +1252,10 @@ class _Portal:
                         '它会生成一个密码并只显示一次。</div>')
             else:
                 boot = ""
-            nxt = self._fix_next((qs.get("next") or [""])[0], self.base + "/request")
-            return await self._send(send, page_login(self.base, nxt, boot))
+            nxt = self._fix_next((qs.get("next") or [""])[0],
+                                 self.base + ("/admin" if want_admin else "/request"))
+            return await self._send(send, page_login(self.base, nxt, boot,
+                                                     mode="admin" if want_admin else "member"))
 
         user = (form.get("user") or "").strip()
         pw = form.get("pw") or ""
@@ -1230,7 +1267,26 @@ class _Portal:
                         "ua": hdrs.get("user-agent", "")[:60]})
             nxt = self._fix_next(form.get("next"), self.base + "/request")
             return await self._send(send, page_login(self.base, nxt, f'<div class="warn">{esc(why)}</div>',
-                                                     user=user), 401)
+                                                     user=user,
+                                                     mode="admin" if want_admin else "member"), 401)
+
+        # 走错门：密码是对的，但入口不对 —— 不签发会话，指给他该去的那个门
+        role = rec.get("role")
+        if want_admin and role != "admin":
+            self.audit("portal_login", {"user": user, "entry": "admin"}, False,
+                       {"actor": user, "ip": ip, "reason": "这是管理员入口，账号不是管理员"})
+            return await self._send(send, page_login(self.base, self.base + "/files",
+                                                    '<div class="warn">这是**管理员入口**，'
+                                                    '你的账号是同事账号。<br>请走普通登录。</div>',
+                                                    user=user, mode="admin"), 401)
+        if (not want_admin) and role == "admin":
+            self.audit("portal_login", {"user": user, "entry": "member"}, False,
+                       {"actor": user, "ip": ip, "reason": "管理员账号走了同事入口"})
+            return await self._send(send, page_login(self.base, self.base + "/admin",
+                                                    '<div class="warn">这是**同事入口**，'
+                                                    f'管理员账号请从<a href="{esc(self.base)}/admin/login">'
+                                                    '管理入口</a>登录。</div>',
+                                                    user=user, mode="member"), 401)
         mins = AUTH.REMEMBER_MINUTES if remember else AUTH.SESSION_MINUTES
         self.audit("portal_login", {"user": user, "remember": remember}, True,
                    {"actor": user, "person": rec.get("person") or "", "role": rec.get("role"),
@@ -1340,7 +1396,7 @@ class _Portal:
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
-                         "/login", "/logout", "/register",
+                         "/login", "/logout", "/register", "/admin/login",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
                          "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
                          "/admin/user", "/admin/pass", "/admin/invite", "/healthz"}
@@ -1365,7 +1421,7 @@ class _Portal:
                 return {"type": "http.request", "body": bodybuf, "more_body": False}
             receive = replay
         self._sess = self._session(hdrs)
-        if sub in ("/login", "/logout", "/register"):
+        if sub in ("/login", "/logout", "/register", "/admin/login"):
             lform: dict = {}
             if method == "POST":
                 lbody = b""
@@ -1914,7 +1970,8 @@ class _Portal:
                 extra = (f'<p><a class="btn" href="{esc(self.base)}/logout?next='
                          f'{esc(quote(sub or "/admin"))}">退出这个账号，用管理员登录</a>'
                          f'<span class="hint" style="margin-left:8px">'
-                         f'（管理员用户名 admin，密码在部署机的 admin-password.txt）</span></p>'
+                         f'（管理员用户名 admin；管理入口：<code>{esc(self.base)}/admin/login</code>）'
+                         f'</span></p>'
                          f'<p class="hint">只想看资料 → <a href="{esc(self.base)}/files">去资料页</a>；'
                          f'要申请权限 → <a href="{esc(self.base)}/request">去申请</a></p>')
                 code = 403
