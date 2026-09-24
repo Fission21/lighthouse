@@ -512,7 +512,7 @@ def cmd_accounts(a) -> int:
         print(f"{(r['user'] or ''):<14} {('管理员' if r['role'] == 'admin' else '同事'):<8} "
               f"{(r['person'] or '-'):<12} {('有' if r['has_pw'] else '无'):<6} "
               f"{('是' if r['locked'] else '否'):<6} "
-              f"{(str(r['last_login'])[:16].replace('T', ' ') if r['last_login'] else '从未登录')}")
+              f"{(INV.fmt(r['last_login']) if r['last_login'] else '从未登录')}")
     print(f"\n共 {len(rows)} 个账号；管理页里每个同事行也能「开通账号 / 重置密码」。")
     return 0
 
