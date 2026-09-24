@@ -202,7 +202,7 @@ bash lighthouse.sh publish                    # 生成隧道配置 + 重启 + �
 
 ```bash
 bash lighthouse.sh kb theme <窗口>              # 看当前是哪套、有哪些可选
-bash lighthouse.sh kb theme <窗口> teal         # 换成松石绿（还有 indigo 墨蓝、paper 暖纸质）
+bash lighthouse.sh kb theme <窗口> indigo       # 默认松石绿 teal；还有 indigo 墨蓝、paper 暖纸质
 bash lighthouse.sh restart <窗口>               # 重启后生效
 ```
 

@@ -154,7 +154,7 @@ bash lighthouse.sh kb revoke bidkb --name 张三          # 停用（随时 --en
 
 ```bash
 bash lighthouse.sh kb theme bidkb            # 看当前主题与可选
-bash lighthouse.sh kb theme bidkb teal       # indigo（墨蓝，默认）/ teal（松石绿）/ paper（暖纸质）
+bash lighthouse.sh kb theme bidkb indigo     # teal（松石绿，默认）/ indigo（墨蓝）/ paper（暖纸质）
 bash lighthouse.sh restart bidkb             # 重启窗口生效
 ```
 

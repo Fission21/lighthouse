@@ -1070,6 +1070,8 @@ async def part_users(site: str, state: Path, zhang: dict):
 
     # ⑫ 设计令牌与主题（配色规范：页面里不许写死颜色）
     import theme as THEME
+    check("默认主题是松石绿（用户 2026-09-24 选定，别悄悄改回去）",
+          THEME.DEFAULT_THEME == "teal" and "teal" in THEME.theme_names())
     check("主题：三套配色都能生成 CSS 变量",
           all("--brand:" in THEME.theme_css(n) for n in THEME.theme_names())
           and len({THEME.theme_css(n) for n in THEME.theme_names()}) == 3)
