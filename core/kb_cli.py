@@ -14,6 +14,9 @@
   kb_cli.py users <窗口> [--show-token]
   kb_cli.py grant <窗口> --name 张三 --level "L1,L2" [--for 30d] [--dept X] [--note "…"]
   kb_cli.py set-level <窗口> --name 张三 --level "L1,L2"
+  kb_cli.py edit <窗口> --name 张三 --levels "L1-商务,L3-核心" --days 90 --dept 技术部 --note "XX 项目"
+  kb_cli.py edit <窗口> --name 张三 --rename 张三丰        # 改名（地址不变）
+  kb_cli.py rm <窗口> --name 张三 --yes                   # 彻底删除
   kb_cli.py rotate <窗口> --name 张三                       换一条新地址（旧的立即失效）
   kb_cli.py revoke <窗口> --name 张三 [--enable]
   kb_cli.py invite <窗口> --name 张三 --out 文件.md [--level L] [--for 30d]
@@ -367,6 +370,90 @@ def cmd_decide(a) -> int:
     return 0
 
 
+def cmd_edit(a) -> int:
+    """改同事的等级/部门/备注/有效期/启用状态/姓名（地址不变）—— 与网页同一个台账层。"""
+    cfg, _root, state = _win(a.window)
+    cfg_levels = list((cfg.get("kb") or {}).get("levels") or [])
+    p = a.name
+    if ACC.get_user(state, a.window, p) is None:
+        print(f"❌ 没有这个同事：{p}")
+        return 1
+    if not any([a.levels, a.dept is not None, a.note is not None, a.days is not None, a.until,
+                a.enable, a.disable, a.rename]):
+        print("❌ 没说要改什么（--levels/--dept/--note/--days/--until/--enable/--disable/--rename）")
+        return 1
+    lv = None
+    if a.levels is not None:
+        lv = [x.strip() for x in str(a.levels).replace("，", ",").split(",") if x.strip()]
+        bad = [x for x in lv if x not in cfg_levels]
+        if bad:
+            print(f"❌ 不认识的等级 {bad}；本窗可用：{cfg_levels}")
+            return 1
+        if not lv:
+            print("❌ 至少要留一个等级（想断开就用 kb revoke / kb rm）")
+            return 1
+    enabled = True if a.enable else (False if a.disable else None)
+    exp = None
+    try:
+        if a.days is not None or a.until:
+            exp = ACC.expiry_to_ts(str(a.days if a.days is not None else ""), a.until)
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    try:
+        u = ACC.update_user(state, a.window, p, levels=lv, dept=a.dept, note=a.note,
+                            expires=(exp if (a.days is not None or a.until) else ACC._UNSET),
+                            enabled=enabled, new_name=a.rename)
+    except (ValueError, RuntimeError) as e:
+        print(f"❌ {e}")
+        return 1
+    _audit_admin(state, a.window, "kb_user_update",
+                 {"person": a.name, "levels": u.get("levels"), "renamed": bool(a.rename)}, u)
+    bits = []
+    if lv is not None:
+        bits.append("等级 " + "、".join(lv))
+    if a.dept is not None:
+        bits.append(f"部门「{a.dept}」")
+    if a.note is not None:
+        bits.append("备注已更新")
+    if a.days is not None or a.until:
+        bits.append(ACC.describe_expiry(u))
+    if enabled is not None:
+        bits.append("已启用" if enabled else "已停用")
+    if a.rename:
+        bits.append(f"改名 {a.name} → {a.rename}")
+    print(f"✅ 已更新 {u['person']}：{'；'.join(bits)}（地址不变）")
+    return 0
+
+
+def cmd_rm(a) -> int:
+    """彻底删掉一个同事（那条地址立即失效）。"""
+    _cfg, _root, state = _win(a.window)
+    u = ACC.get_user(state, a.window, a.name)
+    if not u:
+        print(f"❌ 没有这个同事：{a.name}")
+        return 1
+    if not a.yes:
+        print(f"⚠️  这会把 {a.name} 连地址一起删掉。确认就加 --yes。")
+        return 1
+    ACC.delete_user(state, a.window, a.name)
+    _audit_admin(state, a.window, "kb_user_delete", {"person": a.name}, u)
+    print(f"✅ 已删除 {a.name} —— 他那条地址立刻失效。")
+    return 0
+
+
+def _audit_admin(state_root, wid: str, tool: str, args: dict, u: dict) -> None:
+    """CLI 侧的操作也写审计（和网页同一条流水）。"""
+    import json as _json
+    row = {"ts": __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
+           "window": wid, "tool": tool, "ok": True, "args": args, "actor": "admin", "via": "cli",
+           "person": u.get("person"), "levels": u.get("levels")}
+    d = Path(state_root) / "audit"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f"{wid}.jsonl", "a", encoding="utf-8") as f:
+        f.write(_json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def cmd_users(a) -> int:
     cfg, _root, state = _win(a.window)
     rows = ACC.list_users(state, a.window)
@@ -550,6 +637,16 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--dept", default=""); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_grant if name == "grant" else cmd_set_level)
     p = sub.add_parser("rotate"); p.add_argument("window"); p.add_argument("--name", required=True); p.set_defaults(fn=cmd_rotate)
     p = sub.add_parser("revoke"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--enable", action="store_true"); p.set_defaults(fn=cmd_revoke)
+    p = sub.add_parser("edit"); p.add_argument("window"); p.add_argument("--name", required=True)
+    p.add_argument("--levels", default=None, help='等级，逗号分隔，如 "L1-商务,L2-技术"')
+    p.add_argument("--dept", default=None); p.add_argument("--note", default=None)
+    p.add_argument("--days", default=None, help="有效期：多少天（0=无期限）")
+    p.add_argument("--until", default=None, help="或到某天，2026-12-31")
+    p.add_argument("--enable", action="store_true"); p.add_argument("--disable", action="store_true")
+    p.add_argument("--rename", default=None, help="改成新名字（地址不变）")
+    p.set_defaults(fn=cmd_edit)
+    p = sub.add_parser("rm"); p.add_argument("window"); p.add_argument("--name", required=True)
+    p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_rm)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)

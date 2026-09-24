@@ -164,3 +164,81 @@ def describe_expiry(rec: dict) -> str:
     if not exp:
         return "无期限"
     return datetime.fromtimestamp(float(exp), CST).strftime("%Y-%m-%d %H:%M") + " 到期"
+
+
+# ---------------------------------------------------------------- 细致调整（管理页/CLI 共用）
+_UNSET = object()          # 区分「不改」和「改成无期限（None）」
+
+
+def update_user(state_root: Path, wid: str, person: str, *, levels: list[str] | None = None,
+                dept: str | None = None, note: str | None = None, expires=_UNSET,
+                enabled: bool | None = None, new_name: str | None = None) -> dict | None:
+    """改一个同事的权限/资料（地址不变）。
+
+    levels 覆盖整份等级清单；dept/note 传了就覆盖；expires 传 None = 改回无期限；
+    new_name 改名（保留地址、权限与统计）。
+    """
+    person = (person or "").strip()
+    data, err = load_all(state_root)
+    if err:
+        raise RuntimeError(err)
+    bucket = data.get(wid) or {}
+    rec = bucket.get(person)
+    if not rec:
+        return None
+    if new_name is not None:
+        new_name = new_name.strip()
+        if not new_name:
+            raise ValueError("姓名不能改成空")
+        if new_name != person and new_name in bucket:
+            raise ValueError(f"已经有一个叫「{new_name}」的同事了")
+        del bucket[person]
+        bucket[new_name] = rec
+        rec["person"] = new_name
+    if levels is not None:
+        rec["levels"] = list(levels)
+    if dept is not None:
+        rec["dept"] = dept
+    if note is not None:
+        rec["note"] = note
+    if expires is not _UNSET:
+        rec["expires"] = float(expires) if expires else None
+    if enabled is not None:
+        rec["enabled"] = bool(enabled)
+    data[wid] = bucket
+    save_all(state_root, data)
+    return rec
+
+
+def delete_user(state_root: Path, wid: str, person: str) -> bool:
+    """彻底删掉一个同事（那条地址立即失效，记录也没了）。"""
+    person = (person or "").strip()
+    data, err = load_all(state_root)
+    if err:
+        return False
+    bucket = data.get(wid) or {}
+    if person not in bucket:
+        return False
+    bucket.pop(person)
+    data[wid] = bucket
+    save_all(state_root, data)
+    return True
+
+
+def expiry_to_ts(days: str = "", until: str = "") -> float | None:
+    """把「多少天」或「到某天（YYYY-MM-DD）」换成到期时间戳；都没有 = 无期限。"""
+    until = (until or "").strip()
+    if until:
+        try:
+            d = datetime.strptime(until, "%Y-%m-%d").replace(tzinfo=CST)
+        except ValueError:
+            raise ValueError("日期要写成 2026-10-31 这种格式") from None
+        return d.replace(hour=23, minute=59, second=0).timestamp()
+    days = (days or "").strip()
+    if days and days != "0":
+        try:
+            n = int(days)
+        except ValueError:
+            raise ValueError("天数要写数字") from None
+        return time.time() + n * 24 * 60 * 60
+    return None

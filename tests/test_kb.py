@@ -441,10 +441,12 @@ def part_track(state: Path, env: dict, zhang: dict):
     audit = state / "audit" / "kb1.jsonl"
     check("审计文件已生成", audit.is_file())
     rows = [json.loads(l) for l in audit.read_text(encoding="utf-8").splitlines() if l.strip()]
-    mine = [r for r in rows if r.get("principal") == "张三"]
+    _mgmt = ("kb_user_update", "kb_user_delete", "kb_rotate", "kb_grant", "kb_decision")
+    mine = [r for r in rows if r.get("principal") == "张三" and r.get("tool") not in _mgmt]
     check("审计记到了「谁」（principal=张三）", bool(mine), f"{len(rows)} 条记录")
-    check("审计带上了他的等级", all(r.get("levels") == ["L1-商务", "L2-技术"] for r in mine) if mine else False,
-          str(mine[0].get("levels")) if mine else "")
+    check("审计里每行都有他的等级（改等级后按当时权限记）",
+          all(isinstance(r.get("levels"), list) and r["levels"] for r in mine) if mine else False,
+          str(sorted({str(r.get("levels")) for r in mine})))
     check("审计里有客户端 IP 与 UA 字段", all(("ip" in r and "ua" in r) for r in mine) if mine else False)
     check("越级访问被记成 denied", any(r.get("denied") and not r.get("ok") for r in rows))
     check("未授权尝试也留痕（tool=auth）", any(r.get("tool") == "auth" and r.get("ok") is False for r in rows))
@@ -460,7 +462,8 @@ def part_track(state: Path, env: dict, zhang: dict):
     check("notify --ack 后不再重复提醒", "不再重复提醒" in out, out[-40:])
 
     out, rc = cli("kb", "users", "kb1", env=env)
-    check("kb users 列出同事与用量（含被拒次数）", rc == 0 and "张三" in out and "被拒" in out, out[:80])
+    check("kb users 列出同事与用量（含被拒次数）",
+          rc == 0 and "张三" in out and "被拒" in out and "L1-商务,L2-技术" in out, out[-160:])
     out, rc = cli("kb", "admin-url", "kb1", env=env)
     check("kb admin-url 打印带管理令的管理页地址", rc == 0 and "/admin?k=" in out, out[:80])
 
@@ -863,6 +866,133 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
     _sh.rmtree(docs / "etc", ignore_errors=True)
 
 
+# ---------------------------------------------------------------- ⑨ 同事管理：改等级与其它
+async def part_users(site: str, state: Path, zhang: dict):
+    print("\n⑨ 同事管理页：改等级（多档）/ 有效期 / 部门备注 / 停用 / 换地址 / 改名 / 删除")
+    import kb as KB
+    import kb_web as WEB
+    import kb_access as ACC
+
+    base = site + "/w-kb1-test"
+    admin = WEB.ensure_admin_token(state)
+    did_tech = KB.doc_id("原始文档/技术/服务器技术方案.md")        # L2-技术
+    did_core = KB.doc_id("原始文档/核心/核心网架构.md")            # L3-核心
+
+    st, body = http(f"{base}/admin?k={admin}")
+    check("同事区一行就能改（有勾选框、有效期、保存按钮）",
+          st == 200 and 'name="levels"' in body and "能看哪些等级（可多选）" in body
+          and "换新地址" in body and "看地址" in body)
+    check("同事行里能看到地址（带复制按钮）", "/kb-" in body and "已复制" in body)
+
+    async def can_read(did):
+        async def _f(session):
+            return str(await call(session, "kb_read", {"doc_id": did}))
+        try:
+            return await with_session(f"{site}/kb-{zhang['token']}", _f)
+        except Exception as e:                                                   # noqa: BLE001
+            return f"连接被拒：{e.__class__.__name__}"
+
+    # ① 加一档（L3）→ 立刻能读 L3 的资料
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三",
+                                                "new_name": "张三", "dept": "技术部", "note": "对接 XX 项目",
+                                                "levels": "L1-商务&levels=L2-技术&levels=L3-核心",
+                                                "for_days": "", "until": "", "enabled": "",
+                                                "action": "save"})
+    u = ACC.get_user(state, "kb1", "张三")
+    check("改等级：一次能挂多档（L1+L2+L3）", st == 200 and set(u["levels"]) == {"L1-商务", "L2-技术", "L3-核心"},
+          str(u.get("levels")))
+    check("改名/部门/备注一起存下（地址不变）",
+          u["dept"] == "技术部" and u["note"] == "对接 XX 项目" and u["token"] == zhang["token"])
+    check("回执说清了改了什么", "已更新" in body and "等级" in body, body[:120])
+    r = await can_read(did_core)
+    check("加档后同事立刻能读 L3 的资料（不用重启）", "核心网架构" in str(r), str(r)[:80])
+
+    # ② 减档 → 立刻读不到
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L1-商务&levels=L2-技术", "action": "save"})
+    r = await can_read(did_core)
+    check("减档后立刻读不到（权限是现读现算）", "无权访问" in str(r), str(r)[:80])
+
+    # ③ 有效期：给到具体某天
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L1-商务&levels=L2-技术",
+                                                "until": "2027-01-31", "action": "save"})
+    u = ACC.get_user(state, "kb1", "张三")
+    exp = __import__("datetime").datetime.fromtimestamp(float(u["expires"]), __import__("datetime").timezone(
+        __import__("datetime").timedelta(hours=8)))
+    check("有效期能定到具体某天（当天 23:59 到期）",
+          st == 200 and exp.strftime("%Y-%m-%d %H:%M") == "2027-01-31 23:59", exp.isoformat())
+
+    # ④ 改成无期限
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L1-商务", "for_days": "0", "action": "save"})
+    u = ACC.get_user(state, "kb1", "张三")
+    check("能改成无期限", u["expires"] is None)
+
+    # ⑤ 停用 / 启用
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L1-商务", "enabled": "0", "action": "save"})
+    r = await can_read(did_tech)
+    check("停用后他的地址立刻失效",
+          ("停用" in str(r) or "未授权" in str(r) or "连接被拒" in str(r) or "地址" in str(r)), str(r)[:70])
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L1-商务&levels=L2-技术", "enabled": "1",
+                                                "action": "save"})
+    r = await can_read(did_tech)
+    check("再启用 + 加回 L2 → 又能读", "双电源冗余" in str(r), str(r)[:80])
+
+    # ⑥ 改名（地址与权限跟着走）
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三丰",
+                                                "levels": "L1-商务&levels=L2-技术", "action": "save"})
+    u1, u2 = ACC.get_user(state, "kb1", "张三"), ACC.get_user(state, "kb1", "张三丰")
+    check("改名：新名字下有记录、旧名字清掉、地址不变",
+          u1 is None and u2 is not None and u2["token"] == zhang["token"], str(bool(u1)) + str(bool(u2)))
+    r = await can_read(did_tech)
+    check("改名后他的地址照样能用", "双电源冗余" in str(r), str(r)[:80])
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三丰", "new_name": "李四",
+                                                "levels": "L1-商务", "action": "save"})
+    check("改名撞已有的人 → 拦住并说明", "已经有一个叫" in body, body[:120])
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三丰", "new_name": "张三",
+                                                "levels": "L1-商务&levels=L2-技术", "action": "save"})
+
+    # ⑦ 校验：乱传等级 / 一个都不勾
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "L9-不存在", "action": "save"})
+    u = ACC.get_user(state, "kb1", "张三")
+    check("乱传等级 → 拒绝且不改动", "不在本窗允许清单" in body and set(u["levels"]) == {"L1-商务", "L2-技术"},
+          str(u.get("levels")))
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "张三", "new_name": "张三",
+                                                "levels": "", "action": "save"})
+    check("一个等级都不勾 → 提示（并让他用停用/删除）", "至少要留一个等级" in body, body[:120])
+
+    # ⑧ 换新地址 / 删除（拿一个一次性的同事试，别毁掉后面段要用的张三）
+    ACC.upsert_user(state, "kb1", "测试-待删", ["L1-商务"], dept="临时")
+    old_token = ACC.get_user(state, "kb1", "测试-待删")["token"]
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "测试-待删", "action": "rotate"})
+    new_token = ACC.get_user(state, "kb1", "测试-待删")["token"]
+    check("换新地址：token 变了、旧地址作废",
+          st == 200 and new_token != old_token and ACC.check_token(state, "kb1", old_token)[1] != "", body[:60])
+    st, body = http(f"{base}/admin/user", data={"k": admin, "person": "测试-待删", "action": "delete"})
+    check("删除：记录消失、地址作废",
+          st == 200 and ACC.get_user(state, "kb1", "测试-待删") is None
+          and ACC.check_token(state, "kb1", new_token)[1] != "", body[:60])
+    check("删掉的人不再出现在名单里",
+          not any(u["person"] == "测试-待删" for u in ACC.list_users(state, "kb1")))
+    # 收尾：把张三恢复成正常状态（后面的段还要用他的地址）
+    ACC.update_user(state, "kb1", "张三", levels=["L1-商务", "L2-技术"], dept="技术部",
+                    note="对接 XX 项目", expires=ACC.expiry_to_ts("30", ""), enabled=True)
+
+    # ⑨ 用量看板：按人看明细
+    from urllib.parse import quote as _q
+    st, body = http(f"{base}/admin/usage?k={admin}&person={_q('张三')}")
+    check("用量看板能只看某个人", st == 200 and "只看" in body and "看所有人" in body, str(st))
+    st, body = http(f"{base}/admin/usage?k={admin}&by=person")
+    check("用量看板仍能按人汇总", st == 200 and "按人" in body, str(st))
+
+    # ⑩ 都留痕
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    for tool in ("kb_user_update", "kb_rotate", "kb_user_delete"):
+        check(f"审计留痕：{tool}", any(r.get("tool") == tool and r.get("actor") == "admin" for r in rows))
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
@@ -894,6 +1024,7 @@ async def main() -> int:
         await with_session(f"{site}/kb-{zhang['token']}", link_test)
         await part_admin(site, state, lib, zhang)
         await part_upload(site, state, lib, zhang)
+        await part_users(site, state, zhang)
         part_track(state, env, zhang)
     finally:
         srv.terminate()

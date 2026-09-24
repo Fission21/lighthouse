@@ -180,7 +180,18 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
   .bar {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; background: #f8f9fb;
         border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 0; }}
-  @media (max-width: 640px) {{ th, td {{ padding: 8px; }} th {{ position: static; }} }}
+  .lvpick {{ display: flex; flex-wrap: wrap; gap: 9px; margin-top: 6px; }}
+  .lvpick label {{ display: inline-flex; align-items: center; gap: 9px; padding: 8px 13px; cursor: pointer;
+        font-weight: 400; border: 1px solid var(--line); border-radius: 999px; line-height: 1; background: #fff; }}
+  .lvpick label:has(input:checked) {{ border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, #fff); }}
+  .lvpick input {{ width: 17px; height: 17px; margin: 0; flex: none; }}
+  .rowform {{ border-top: 1px dashed var(--line); padding-top: 10px; }}
+  .rowform .grid2 {{ grid-template-columns: repeat(2, minmax(150px, 1fr)); }}
+  a.minor {{ color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }}
+  .perm {{ min-width: 380px; }}
+  form .bar {{ margin-top: 12px; }}
+  td .bar .hint {{ margin-left: 2px; }}
+  @media (max-width: 640px) {{ th, td {{ padding: 8px; }} th {{ position: static; }} .perm {{ min-width: 280px; }} }}
 </style></head><body>{nav}<h1>{esc(title)}</h1>{body}</body></html>""".encode("utf-8")
 
 
@@ -276,29 +287,80 @@ def page_status(base: str, rec: dict | None, err: str = "", address: str = "") -
     return _page("申请进度", body, base)
 
 
-def _users_table(state_root: Path, wid: str, admin: str, base: str) -> str:
+def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list[str]) -> str:
+    """已授权的同事：一行就能改等级（可多档）、有效期、部门/备注、停用、换地址、删除、看地址。"""
+    users = ACC.list_users(state_root, wid)
+    if not users:
+        return '<p class="hint">还没有给任何人发过地址。下面可以直接发一条，或让同事去申请页自己申请。</p>'
     rows = []
-    for u in ACC.list_users(state_root, wid):
-        state = "✅ 有效" if u.get("enabled", True) else "⛔ 已停用"
-        exp = ACC.describe_expiry(u)
-        last = (u.get("last_seen") or "从未使用").replace("T", " ")[:16]
-        actions = (f'<form method="post" action="{esc(base)}/admin/rotate" style="display:inline">'
-                   f'<input type="hidden" name="k" value="{esc(admin)}">'
-                   f'<input type="hidden" name="person" value="{esc(u["person"])}">'
-                   f'<button class="ghost" type="submit">换地址</button></form> '
-                   f'<form method="post" action="{esc(base)}/admin/revoke" style="display:inline">'
-                   f'<input type="hidden" name="k" value="{esc(admin)}">'
-                   f'<input type="hidden" name="person" value="{esc(u["person"])}">'
-                   f'<input type="hidden" name="enabled" value="{"0" if u.get("enabled", True) else "1"}">'
-                   f'<button class="ghost" type="submit">{"停用" if u.get("enabled", True) else "恢复"}</button></form>')
-        rows.append(f'<tr><td>{esc(u["person"])}</td><td>{esc(", ".join(u.get("levels") or []))}</td>'
-                    f'<td>{esc(state)}<br><span class="hint">{esc(exp)}</span></td>'
-                    f'<td>{esc(last)}<br><span class="hint">调 {u.get("calls", 0)} / 拒 {u.get("denied", 0)}</span></td>'
-                    f'<td>{actions}</td></tr>')
-    if not rows:
-        return '<p class="hint">还没有给任何人发过地址。</p>'
-    return ('<table><tr><th>同事</th><th>等级</th><th>状态</th><th>使用</th><th>操作</th></tr>'
-            + "".join(rows) + "</table>")
+    for u in users:
+        person = u.get("person") or ""
+        token = str(u.get("token") or "")
+        address = (base.split("/w-")[0] if "/w-" in base else "") + f"/kb-{token}"
+        my_levels = list(u.get("levels") or [])
+        lv_boxes = "".join(
+            f'<label><input type="checkbox" name="levels" value="{esc(l)}"'
+            f'{" checked" if l in my_levels else ""}><span>{esc(l)}</span></label>' for l in levels)
+        state = u.get("enabled", True)
+        exp = u.get("expires")
+        cur_days = ""
+        if exp:
+            left = (float(exp) - time.time()) / 86400
+            cur_days = f"{int(left)} 天" if left > 0 else "已过期"
+        sc = "c-approved" if state else "c-unsupported"
+        rows.append(f'''<tr>
+<td>{esc(person)}<br><span class="hint">加入 {esc(str(u.get("created_at") or "")[:16].replace("T", " "))}</span></td>
+<td class="perm">
+  <form method="post" action="{esc(base)}/admin/user" class="rowform">
+    <input type="hidden" name="k" value="{esc(admin)}">
+    <input type="hidden" name="person" value="{esc(person)}">
+    <div class="grid2" style="gap:6px">
+      <div><label>姓名</label><input name="new_name" value="{esc(person)}" maxlength="40"></div>
+      <div><label>部门</label><input name="dept" value="{esc(u.get("dept") or "")}" maxlength="40"></div>
+      <div><label>备注</label><input name="note" value="{esc(u.get("note") or "")}" maxlength="80"></div>
+    </div>
+    <div style="margin-top:10px"><label>能看哪些等级（可多选）</label>
+      <div class="lvpick">{lv_boxes}</div></div>
+    <div class="grid2" style="gap:6px;margin-top:8px">
+      <div><label>有效期</label>
+        <select name="for_days">
+          <option value="">不改（现在：{esc(cur_days or "无期限")}）</option>
+          <option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option>
+          <option value="180">180 天</option><option value="365">一年</option>
+          <option value="0">改成无期限（长期有效）</option>
+        </select></div>
+      <div><label>或到某天</label><input type="date" name="until"></div>
+      <div><label>状态</label><select name="enabled">
+        <option value="">不改（现在：{"启用中" if state else "已停用"}）</option>
+        <option value="1">启用</option><option value="0">停用</option>
+      </select></div>
+    </div>
+    <div class="bar" style="margin-top:10px">
+      <button class="tiny" name="action" value="save">保存</button>
+      <button class="tiny ghost" name="action" value="rotate"
+              onclick="return confirm('给他换一条新地址？旧地址立刻失效。')">更换地址</button>
+      <button class="tiny danger" name="action" value="delete"
+              onclick="return confirm('彻底删掉 {esc(person)}？这条地址立刻失效，记录也没了。')">删除</button>
+      <span class="hint">调用 {int(u.get("calls") or 0)} 次 · 被拒 {int(u.get("denied") or 0)} 次 ·
+        最后活跃 {esc(str(u.get("last_seen") or "—")[:16].replace("T", " "))}</span>
+      <a class="minor" href="{esc(base)}/admin/usage?k={esc(admin)}&person={esc(person)}">看他的使用明细</a>
+    </div>
+  </form>
+</td>
+<td>
+  <span class="chip {sc}">{"启用中" if state else "已停用"}</span><br>
+  <span class="hint">有效期：{esc(ACC.describe_expiry(u))}</span><br>
+  <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">看地址</summary>
+    <code style="display:block;margin-top:4px">{esc(address)}</code>
+    <button type="button" class="tiny ghost" onclick="navigator.clipboard.writeText('{esc(address)}').then(()=>{{this.textContent='已复制'}},()=>{{}})">
+      复制</button>
+    <span class="hint">（这条等于他的口令，只发给他本人）</span>
+  </details>
+</td></tr>''')
+    return ('<div class="wrap"><table><tr><th>同事</th><th>权限与资料</th><th>状态 / 地址</th></tr>'
+            + "".join(rows) + "</table></div>"
+            '<p class="hint">改完点那一行的「保存」立刻生效（不用重启服务）：等级可多选，'
+            '有效期可给天数或具体某天，「改成无期限」就是不限期。</p>')
 
 
 def page_files(base: str, person: str, levels: list[str], docs: list[dict], token: str,
@@ -618,6 +680,8 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
               + "".join(prows) + "</table>") if prows else '<p class="hint">没有待批申请。</p>'
 
     all_levels = "".join(f'<option value="{esc(l)}">{esc(l)}</option>' for l in levels)
+    all_levels_boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(l)}">'
+                               f'<span>{esc(l)}</span></label>' for l in levels)
     docs_html = (_docs_panel(base, state_root, wid, admin, levels, root, docs_rel, q)
                  if root is not None else '')
     body = f"""{msg}
@@ -629,18 +693,22 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 {ptable}
 
 <h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>
-{_users_table(state_root, wid, admin, base)}
+{_users_table(state_root, wid, admin, base, levels)}
 
 <h2>直接发一条地址（不经申请）</h2>
 <form method="post" action="{esc(base)}/admin/grant">
   <input type="hidden" name="k" value="{esc(admin)}">
-  <label>姓名</label><input name="person" maxlength="40" required>
-  <label>部门</label><input name="dept" maxlength="40">
-  <label>等级</label><select name="level">{all_levels}</select>
-  <label>有效期</label><select name="for_days"><option value="30">30 天</option><option value="7">7 天</option>
-    <option value="90">90 天</option><option value="0">无期限</option></select>
-  <label>备注</label><input name="note" maxlength="80">
-  <button type="submit">发放</button>
+  <div class="grid2">
+    <div><label>姓名</label><input name="person" maxlength="40" required></div>
+    <div><label>部门</label><input name="dept" maxlength="40"></div>
+    <div><label>有效期</label><select name="for_days"><option value="30">30 天</option>
+      <option value="7">7 天</option><option value="90">90 天</option>
+      <option value="180">180 天</option><option value="0">无期限</option></select></div>
+    <div><label>备注</label><input name="note" maxlength="80" placeholder="例如：XX 项目对接"></div>
+  </div>
+  <div style="margin-top:12px"><label>能看哪些等级（可多选）</label>
+    <div class="lvpick">{all_levels_boxes}</div></div>
+  <button type="submit">发放地址</button>
 </form>
 <p class="hint" style="margin-top:18px">用量看板：<a href="{esc(base)}/admin/usage?k={esc(admin)}">按人 / 按天 / 按资料</a>
 　·　命令行等价：<code>bash lighthouse.sh kb usage &lt;窗口&gt;</code></p>
@@ -649,8 +717,11 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
     return _page("资料库管理页", body, base, admin=admin, wide=True)
 
 
-def page_usage(base: str, state_root: Path, wid: str, admin: str, by: str, days: int) -> bytes:
+def page_usage(base: str, state_root: Path, wid: str, admin: str, by: str, days: int,
+               person: str = "") -> bytes:
     rows = USAGE.read_audit(state_root, wid, days)
+    if person:
+        rows = [r for r in rows if str(r.get("principal") or "") == person]
     summary = USAGE.summarize(rows, by)
     head = {"person": "同事", "day": "日期", "doc": "资料", "tool": "工具"}[by]
     th = f'<tr><th>{esc(head)}</th><th>调用</th><th>成功</th><th>被拒</th><th>最后活跃</th><th>常读资料</th></tr>'
@@ -665,8 +736,13 @@ def page_usage(base: str, state_root: Path, wid: str, admin: str, by: str, days:
                     f'<td>{esc(r.get("tool"))}</td><td>{esc(json.dumps(r.get("args") or {}, ensure_ascii=False))[:80]}</td>'
                     f'<td>{"✅" if r.get("ok") else "⛔ " + esc(str(r.get("reason") or "")[:40])}</td></tr>'
                     for r in recent)
-    body = f"""<p class="lead">用量看板 · 近 {days} 天 · 共 {len(rows)} 条记录</p>
-<p>{links}</p>
+    who = (f' · 只看 <b>{esc(person)}</b>　<a class="hint" href="{esc(base)}/admin/usage?k={esc(admin)}&by={esc(by)}&days={days}">'
+           f'看所有人</a>' if person else "")
+    extra = "".join(f' · <a href="{esc(base)}/admin/usage?k={esc(admin)}&person={esc(p)}&days={days}">{esc(p)}</a>'
+                    for p in sorted({str(r.get("principal")) for r in USAGE.read_audit(state_root, wid, days)
+                                     if r.get("principal") and r.get("principal") != "-"}))
+    body = f"""<p class="lead">用量看板 · 近 {days} 天 · 共 {len(rows)} 条记录{who}</p>
+<p>{links}{'　·　按人：' + extra if extra else ''}</p>
 <table>{th}{trs or '<tr><td colspan="6" class="hint">没有记录</td></tr>'}</table>
 <h2>最近调用明细</h2>
 <table><tr><th>时间</th><th>谁</th><th>工具</th><th>参数</th><th>结果</th></tr>{rrows or '<tr><td colspan="5" class="hint">没有记录</td></tr>'}</table>"""
@@ -739,7 +815,8 @@ class _Portal:
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
-                         "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk", "/healthz"}
+                         "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
+                         "/admin/user", "/healthz"}
         if sub not in portal_routes and not sub.startswith("/dl/"):
             accept = hdrs.get("accept", "")
             if sub in ("", "/") and method == "GET" and "text/html" in accept and "text/event-stream" not in accept:
@@ -1212,7 +1289,8 @@ class _Portal:
             days = int((qs.get("days") or ["30"])[0] or 30)
             if by not in ("person", "day", "doc", "tool"):
                 by = "person"
-            return await self._send(send, page_usage(self.base, self.state_root, self.win.id, admin, by, days))
+            return await self._send(send, page_usage(self.base, self.state_root, self.win.id, admin, by, days,
+                                                     (qs.get("person") or [""])[0]))
         if sub == "/admin" and method == "GET":
             return await self._send(send, page_admin(
                 self.base, self.state_root, self.win.id, admin, self.levels, self.host,
@@ -1252,17 +1330,22 @@ class _Portal:
                 msg = '<div class="warn">已驳回。</div>'
         elif sub == "/admin/grant":
             person = (form.get("person") or "").strip()
-            level = form.get("level", "")
-            if not person or level not in self.levels:
+            picked = [x for x in (self._multi.get("levels") or []) if x in self.levels]
+            if not picked and form.get("level") in self.levels:      # 兼容只传一个 level 的旧表单
+                picked = [form["level"]]
+            level = picked[0] if len(picked) == 1 else ""
+            if not person or not picked:
                 msg = '<div class="warn">姓名和等级都要填对。</div>'
             else:
                 days = int(form.get("for_days", "30") or 0)
                 minutes = days * 1440 if days else None
-                u = ACC.upsert_user(self.state_root, self.win.id, person, [level],
+                u = ACC.upsert_user(self.state_root, self.win.id, person, picked,
                                     dept=form.get("dept", ""), note=form.get("note", ""), minutes=minutes)
-                self.audit("kb_grant", {"person": person, "level": level}, True,
-                           {"person": person, "levels": [level], "actor": "admin", "ip": ip, "expires": u.get("expires")})
-                msg = (f'<div class="ok">✅ {esc(person)} 的地址已发放（{esc(level)}，{esc(ACC.describe_expiry(u))}）'
+                self.audit("kb_grant", {"person": person, "levels": picked}, True,
+                           {"person": person, "levels": picked, "actor": "admin", "ip": ip,
+                            "expires": u.get("expires")})
+                msg = (f'<div class="ok">✅ {esc(person)} 的地址已发放（{"、".join(esc(x) for x in picked)}，'
+                       f'{esc(ACC.describe_expiry(u))}）'
                        f'<br><code>{esc(self._address(u["token"]))}</code></div>')
         elif sub == "/admin/revoke":
             person = form.get("person", "")
@@ -1272,6 +1355,57 @@ class _Portal:
                 msg = f'<div class="ok">已{"恢复" if enabled else "停用"} {esc(person)} 的地址。</div>'
             else:
                 msg = '<div class="warn">找不到这个人。</div>'
+        elif sub == "/admin/user":
+            person = (form.get("person") or "").strip()
+            act = form.get("action") or "save"
+            rec = ACC.get_user(self.state_root, self.win.id, person)
+            if not rec:
+                msg = '<div class="warn">找不到这个同事。</div>'
+            elif act == "delete":
+                ACC.delete_user(self.state_root, self.win.id, person)
+                self.audit("kb_user_delete", {"person": person}, True, {"actor": "admin", "ip": ip})
+                msg = f'<div class="ok">已删掉 <b>{esc(person)}</b> —— 他那条地址立刻失效。</div>'
+            elif act == "rotate":
+                u = ACC.rotate(self.state_root, self.win.id, person)
+                self.audit("kb_rotate", {"person": person}, True, {"actor": "admin", "ip": ip})
+                msg = (f'<div class="ok">✅ 已给 {esc(person)} 换新地址（旧地址立刻失效）'
+                       f'<br><code>{esc(self._address(u["token"]))}</code></div>')
+            else:                                                        # save
+                lv = [x for x in (self._multi.get("levels") or []) if x in self.levels]
+                bad = [x for x in (self._multi.get("levels") or []) if x not in self.levels]
+                if bad:
+                    msg = f'<div class="warn">等级不在本窗允许清单里：{esc("、".join(bad))}</div>'
+                elif not lv:
+                    msg = ('<div class="warn">至少要留一个等级 —— 都不勾就等于让他什么都看不到。'
+                           '想完全断开就点「停用」或「删除」。</div>')
+                else:
+                    days = form.get("for_days", "")
+                    until = form.get("until", "")
+                    enabled = {"1": True, "0": False}.get(form.get("enabled", ""), None)
+                    new_name = (form.get("new_name") or person).strip() or person
+                    try:
+                        exp = ACC.expiry_to_ts(days, until)
+                        u = ACC.update_user(self.state_root, self.win.id, person,
+                                            levels=lv, dept=form.get("dept", ""), note=form.get("note", ""),
+                                            expires=(exp if (days or until) else ACC._UNSET),
+                                            enabled=enabled, new_name=new_name)
+                    except (ValueError, RuntimeError) as e:
+                        u, exp = None, None
+                        msg = f'<div class="warn">⛔ 没保存：{esc(str(e))}</div>'
+                    if u:
+                        self.audit("kb_user_update", {"person": person, "levels": lv,
+                                                      "days": days, "until": until,
+                                                      "enabled": enabled, "renamed": new_name != person},
+                                   True, {"person": u["person"], "levels": lv, "actor": "admin", "ip": ip})
+                        bits = ["等级 " + "、".join(lv)]
+                        if days or until:
+                            bits.append(ACC.describe_expiry(u))
+                        if enabled is not None:
+                            bits.append("已启用" if enabled else "已停用")
+                        if new_name != person:
+                            bits.append(f"改名：{person} → {new_name}")
+                        msg = f'<div class="ok">✅ 已更新 <b>{esc(u["person"])}</b>：' + esc(" · ".join(bits)) + "</div>"
+
         elif sub == "/admin/rotate":
             person = form.get("person", "")
             u = ACC.rotate(self.state_root, self.win.id, person)
