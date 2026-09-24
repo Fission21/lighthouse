@@ -1246,6 +1246,12 @@ class _Portal:
                                                     f'<div class="warn">{esc(why)}</div>', self.base),
                                         403 if "公网" in why else 401)
         if method == "GET":
+            # 已经登录的人再打开登录页，就别再给表单了：直接送到他该去的页面
+            if self._sess:
+                who = AUTH.get(self.state_root, self._sess.get("user") or "")
+                if who:
+                    home = self.base + ("/admin" if who.get("role") == "admin" else "/files")
+                    return await self._send(send, b"", 302, location=home)
             if not AUTH.has_admin(self.state_root):
                 boot = ('<div class="warn">还没有管理员账号。请在部署机上执行：<br><code>'
                         'bash lighthouse.sh kb passwd ' + self.win.id + ' --admin</code><br>'
@@ -1294,11 +1300,13 @@ class _Portal:
                     "ua": hdrs.get("user-agent", "")[:60]})
         nxt = self._fix_next(form.get("next"),
                              self.base + ("/admin" if rec.get("role") == "admin" else "/files"))
-        return await self._send(send, _page("登录成功", '<div class="ok">登录成功，正在进入…</div>'
-                                          f'<p><a class="btn" href="{esc(nxt)}">继续</a></p>', self.base),
-                                200, cookie=AUTH.cookie_header(self.state_root, rec, minutes=mins,
+        # 登录成功 → 直接 302 跳过去（POST/Redirect/GET：刷新不会重复提交表单）。
+        # 老浏览器不跟随 Location 时，body 里还有一条手动链接兜底。
+        return await self._send(send, f'<p>登录成功，正在进入… 没跳？<a href="{esc(nxt)}">点这里继续</a></p>'.encode(),
+                                302, cookie=AUTH.cookie_header(self.state_root, rec, minutes=mins,
                                                                secure=bool(hdrs.get("cf-connecting-ip")
-                                                                           or hdrs.get("x-forwarded-for"))))
+                                                                           or hdrs.get("x-forwarded-for"))),
+                                location=nxt)
 
     async def _register(self, send, method: str, qs: dict, form: dict, ip: str, hdrs: dict):
         """凭邀请码自助注册：一次填完 → 发地址 + 建账号 + 自动登录。"""

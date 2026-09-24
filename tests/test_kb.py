@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -89,27 +89,58 @@ def http(url: str, data: dict | None = None, headers: dict | None = None,
         return e.code, e.read().decode("utf-8", errors="replace")
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    """不跟随 302：登录成功要的就是那个 302 上的 Location 和 Set-Cookie。"""
+
+    def redirect_request(self, *a, **kw):        # noqa: D102
+        return None
+
+
+_OPENER = build_opener(_NoRedirect)
+
+
+def http_noredirect(url: str, data: dict | None = None, cookie=None) -> tuple[int, str, str]:
+    """不跟随重定向的请求：返回 (状态码, Location, 正文)。"""
+    body = None
+    hdrs: dict = {}
+    if data is not None:
+        body = "&".join(f"{k}={v}" for k, v in data.items()).encode()
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+    ck = SESSION["cookie"] if cookie is None else cookie
+    if ck:
+        hdrs["Cookie"] = ck
+    req = Request(url, data=body, headers=hdrs)
+    try:
+        with _OPENER.open(req, timeout=15) as r:
+            return r.status, r.headers.get("Location") or "", r.read().decode("utf-8", errors="replace")
+    except HTTPError as e:
+        return e.code, e.headers.get("Location") or "", e.read().decode("utf-8", errors="replace")
+
+
 def login(base_url: str, user: str, pw: str, remember: bool = False,
           entry: str = "member") -> tuple[int, str]:
     """登录，并把会话 cookie 记为默认（之后所有 http() 都带上）。
 
     entry="member" 走同事入口 /login（默认）；entry="admin" 走管理入口 /admin/login。
     两个入口共用一套账号，但会互相拦（走错门 → 401 + 指路），所以管理员必须走管理入口。
+
+    **登录成功是 302 跳转**（POST/Redirect/GET），所以这里不跟随重定向：
+    返回值是 (状态码, Location)；失败时是 (状态码, 页面正文) —— 断言里两种都当"第二段"用。
     """
-    body = f"user={quote(user)}&pw={quote(pw)}&next={quote(base_url.rstrip('/') + '/admin')}"
+    body = f"user={quote(user)}&pw={quote(pw)}&next={quote(base_url.rstrip('/') + ('/admin' if entry == 'admin' else '/files'))}"
     if remember:
         body += "&remember=1"
     req = Request(base_url + ("/admin/login" if entry == "admin" else "/login"), data=body.encode(),
                   headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
-        with urlopen(req, timeout=15) as r:
+        with _OPENER.open(req, timeout=15) as r:
             st, txt, hd = r.status, r.read().decode("utf-8", errors="replace"), r.headers
     except HTTPError as e:
         st, txt, hd = e.code, e.read().decode("utf-8", errors="replace"), e.headers
     raw = hd.get("Set-Cookie") or ""
     if raw:
         SESSION["cookie"] = raw.split(";")[0]
-    return st, txt
+    return st, (hd.get("Location") or txt)
 
 
 def http_bytes(url: str, data: dict | None = None, headers: dict | None = None) -> tuple[int, bytes, dict]:
@@ -1192,8 +1223,9 @@ async def part_auth(site: str, state: Path, admin_pw: str):
           st == 401 and "连错太多次" in body, body[:80])
     AUTH.set_account(state, "admin", role="admin", password=admin_pw, person="管理员")   # 解锁（等价于重置）
     st, body = login(site + "/w-kb1-test", "admin", admin_pw, entry="admin")
-    check("重置后再登录 → 成功", st == 200 and "登录成功" in body, f"HTTP {st}")
-    check("登录后拿到的是签名 cookie（HttpOnly/SameSite）",
+    check("登录成功 → 302 真跳转（不是停在「正在进入」的页面上）",
+          st == 302 and body.endswith("/admin"), f"HTTP {st} loc={body[:60]}")
+    check("302 响应上就带了会话 cookie（跳过去已经是登录态）",
           SESSION["cookie"].startswith("lh_sess="), SESSION["cookie"][:20])
 
     # ---- 会话 cookie 的安全性 ----
@@ -1216,7 +1248,8 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = login(site + "/w-kb1-test", "logintester", AUTH.gen_password(6))   # 先错一次
     _rec, pw2 = AUTH.reset_password(state, "logintester", length=12)
     st, body = login(site + "/w-kb1-test", "logintester", pw2)
-    check("同事也能登录（他自己的账号）", st == 200 and "登录成功" in body, f"HTTP {st}")
+    check("同事也能登录（他自己的账号）→ 302 送到资料页",
+          st == 302 and body.endswith("/files"), f"HTTP {st} loc={body[:60]}")
     st, body = http(f"{base}/admin")
     check("同事登录后进不了管理页（说清是谁登录着 + 给出换成管理员的路）",
           st == 403 and "用户" in body and "/logout?next=" in body, f"HTTP {st}")
@@ -1245,10 +1278,17 @@ async def part_auth(site: str, state: Path, admin_pw: str):
           st == 401 and "管理员入口" in body and "同事账号" in body, f"HTTP {st}")
     check("走错门不签发会话（同事也一样）", SESSION["cookie"] == "", "")
     st, body = login(site + "/w-kb1-test", "logintester", pw2)          # 同事走对门
-    check("同事走对门 → 正常登录", st == 200 and "登录成功" in body, f"HTTP {st}")
+    check("同事走对门 → 正常登录（302 送资料页）",
+          st == 302 and body.endswith("/files"), f"HTTP {st} loc={body[:60]}")
     st, body = http(f"{base}/admin/login", cookie="")
-    check("已登录的同事打开管理员登录页也不给管理页（会让他先退出）",
-          st in (200, 401, 403) and "管理员入口" in body, f"HTTP {st}")
+    check("未登录（匿名）打开管理员登录页 → 给表单",
+          st == 200 and "管理员入口" in body, f"HTTP {st}")
+    st, loc, _b = http_noredirect(f"{base}/login")          # 此时是同事登录态
+    check("已登录的人再打开登录页 → 302 直接送到他该去的地方",
+          st == 302 and loc.endswith("/files"), f"HTTP {st} loc={loc[:60]}")
+    st, loc, _b = http_noredirect(f"{base}/admin/login")    # 同事登录态打开管理入口
+    check("已登录的同事打开管理入口 → 也是 302 送资料页（不给表单、更不给管理页）",
+          st == 302 and loc.endswith("/files"), f"HTTP {st} loc={loc[:60]}")
     login(site + "/w-kb1-test", "admin", admin_pw, entry="admin")       # 换回管理员，后面还要用
 
     # ---- 登出 ----
