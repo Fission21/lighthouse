@@ -976,6 +976,162 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
           f"{n_docs} 篇 status={e_rep.get('status')} level={e_rep.get('level')}")
 
 
+# ---------------------------------------------------------------- ⑬ 文件夹与回收站
+async def part_folders(site: str, state: Path, lib: Path, zhang: dict):
+    print("\n⑬ 文件夹（新建/拖动移动/默认等级）与回收站（进/放回/彻底删）")
+    import kb as KB
+    import kb_folder as FOLD
+    import kb_web as WEB
+
+    base = site + "/w-kb1-test"
+    admin = WEB.ensure_admin_token(state)
+    docs = lib / "原始文档"
+
+    # 现造一篇放在「技术」里的资料（前面 ⑦ 段把之前那篇的台账条目删了，不能用它）
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin,
+                              {"k": admin, "category": "技术", "level": "L2-技术", "after": "pending"},
+                              [("files", "要挪的.md", "# 要挪的\n\n正文。\n".encode())])
+    did_mv = KB.doc_id("原始文档/技术/要挪的.md")
+    check("（准备）往「技术」里放一篇待挪的资料",
+          st == 200 and (docs / "技术" / "要挪的.md").is_file(), f"HTTP {st}")
+
+    # ---- 新建文件夹 ----
+    st, body = http(f"{base}/admin/mkdir", data={"k": admin, "cur": "", "dir": "归档 2026"})
+    check("新建文件夹 → 磁盘上真的建了目录", st == 200 and (docs / "归档 2026").is_dir(), f"HTTP {st}")
+    check("新建后页面说清楚了 + 停在新建的文件夹里",
+          "已新建文件夹" in body and "归档 2026" in body, body[:80])
+    st, body = http(f"{base}/admin?k=" + admin)
+    _dd = 'data-drop="归档 2026"'
+    check("面板里出现文件夹行（可拖放 + 可设默认等级 + 可删）",
+          _dd in body and "存默认等级" in body and "删除（进回收站）" in body,
+          "drop=%s 等级=%s 删=%s" % (_dd in body, "存默认等级" in body, "删除（进回收站）" in body))
+    st, body = http(f"{base}/admin/mkdir", data={"k": admin, "cur": "", "dir": "归档 2026"})
+    check("同名文件夹再建 → 拒绝（不覆盖）", "已经有了" in body, body[:80])
+    for bad in ("../逃逸", "/etc/绝对路径", ".隐藏", "a/b/c/d/e/f/g", "怪<名>"):
+        st, body = http(f"{base}/admin/mkdir", data={"k": admin, "cur": "", "dir": bad})
+        check(f"非法文件夹名「{bad}」→ 拒绝", "建不了" in body, body[:160].replace("\n", " "))
+    check("非法名没在磁盘上留下东西",
+          not (docs.parent / "逃逸").exists() and not (docs / ".隐藏").exists())
+
+    # ---- 移动（拖动的后端动作）----
+    st, body = http(f"{base}/admin/move", data={"k": admin, "did": did_mv, "dest": "归档 2026"})
+    did_new = KB.doc_id("原始文档/归档 2026/要挪的.md")
+    cat, _ = KB.load_catalog(state, "kb1")
+    rec = (cat["docs"] or {}).get(did_new) or {}
+    check("移动 → 文件在磁盘上挪了（原位置没了）",
+          (docs / "归档 2026" / "要挪的.md").is_file() and not (docs / "技术" / "要挪的.md").exists(),
+          body[:120])
+    check("移动 → 台账 path 跟着改、id 换成新路径的", rec.get("path") == "原始文档/归档 2026/要挪的.md")
+    check("移动 → 状态与等级原样保留（不算改内容，不退回待批）",
+          rec.get("status") == "pending" and rec.get("level") == "L2-技术", str(rec)[:120])
+    check("移动 → 抽取的文本缓存跟着换名",
+          (state / "kb" / "kb1" / "text" / f"{did_new}.md").is_file())
+    check("移动 → 旧 id 不再占着台账", did_mv not in (cat["docs"] or {}))
+    check("移动被记进审计（kb_move）",
+          any(r.get("tool") == "kb_move" and r.get("ok") for r in _audit_rows(state)))
+
+    # ---- 重名移动：绝不覆盖 ----
+    (docs / "归档 2026" / "同名.md").write_text("# 已有的那份\n", encoding="utf-8")
+    (docs / "技术" / "同名.md").write_text("# 后来的一份\n", encoding="utf-8")
+    KB.upsert_doc(state, "kb1", rel="原始文档/技术/同名.md", title="同名（技术）", level="L1-商务",
+                  status="approved")
+    st, body = http(f"{base}/admin/move", data={"k": admin, "did": KB.doc_id("原始文档/技术/同名.md"),
+                                                "dest": "归档 2026"})
+    check("目标里已有同名 → 自动加 (2)，两边都还在",
+          (docs / "归档 2026" / "同名.md").read_text(encoding="utf-8").startswith("# 已有的那份")
+          and (docs / "归档 2026" / "同名 (2).md").is_file(), body[:80])
+
+    # ---- 文件夹默认等级：新文件继承 ----
+    st, body = http(f"{base}/admin/flevel", data={"k": admin, "folder": "归档 2026",
+                                                  "level": "L3-核心", "cur": ""})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("给文件夹设默认等级 → 写进台账 folders",
+          ((cat.get("folders") or {}).get("归档 2026") or {}).get("level") == "L3-核心",
+          str(cat.get("folders")))
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin,
+                              {"k": admin, "category": "归档 2026", "level": "", "after": "pending"},
+                              [("files", "继承等级.md", "# 继承\n\n看等级是不是继承来的。\n".encode())])
+    did_inh = KB.doc_id("原始文档/归档 2026/继承等级.md")
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("新文件继承文件夹默认等级（没传 level 也按 L3-核心 落档）",
+          ((cat["docs"].get(did_inh) or {}).get("level")) == "L3-核心",
+          str((cat["docs"].get(did_inh) or {}).get("level")))
+    st, body = http(f"{base}/admin/flevel", data={"k": admin, "folder": "归档 2026", "level": "", "cur": ""})
+    check("清掉文件夹默认等级 → 台账里也不留",
+          "归档 2026" not in (KB.load_catalog(state, "kb1")[0].get("folders") or {}))
+
+    # ---- 回收站：单篇 ----
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "one": did_inh + "@trash"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    rec = (cat["docs"] or {}).get(did_inh) or {}
+    trash_names = [r["name"] for r in FOLD.list_trash(lib, "原始文档")]
+    check("单篇进回收站 → 文件挪到 .回收站/，台账标 trashed 且记住原状态",
+          rec.get("status") == "trashed" and rec.get("prev_status") == "pending" and bool(trash_names),
+          str(rec)[:90])
+    check("回收站里的东西不出现在正常扫描范围（隐藏目录）",
+          not any("继承等级" in str(x) for x in __import__("kb_ingest").walk_docs(docs)))
+    st, body = http(f"{base}/admin?k=" + admin)
+    check("管理页：正常清单里看不到它，回收站区里能看到",
+          "回收站（" in body and "继承等级" in body and "放回" in body)
+    st, body = http(f"{base}/admin/trash", data={"k": admin, "action": "restore", "name": trash_names[0]})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("放回原位 → 文件回来了、状态回到进回收站之前",
+          (docs / "归档 2026" / "继承等级.md").is_file()
+          and ((cat["docs"].get(did_inh) or {}).get("status")) == "pending", body[:80])
+
+    # ---- 回收站：整个文件夹（连里面的资料一起）----
+    st, body = http(f"{base}/admin/rmdir", data={"k": admin, "cur": "", "dir": "归档 2026"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    inside = {d: e for d, e in (cat["docs"] or {}).items() if "归档 2026/" in (e.get("path") or "")}
+    bad = {d: e.get("status") for d, e in inside.items() if e.get("status") != "trashed"}
+    check("删文件夹 → 整棵进回收站，里面的资料一起标 trashed",
+          not (docs / "归档 2026").exists() and inside and not bad,
+          f"里面 {len(inside)} 篇，没标上的：{bad}")
+    check("删文件夹也留痕（kb_rmdir）",
+          any(r.get("tool") == "kb_rmdir" and r.get("ok") for r in _audit_rows(state)))
+
+    # ---- 改标题：只改显示标题 ----
+    st, body = http(f"{base}/admin/bulk",
+                    data={"k": admin, "one": did_new + "@title", "title_" + did_new: "要挪的（改过）"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    rec = (cat["docs"] or {}).get(did_new) or {}
+    check("改标题 → 台账 title 变了、磁盘文件名没动、id 也没变",
+          rec.get("title") == "要挪的（改过）" and rec.get("id") == did_new
+          and Path(rec.get("path") or "").name == "要挪的.md", str(rec)[:110])
+
+    # ---- 同事侧：按文件夹分组 + 整包下载 ----
+    st, body = http(f"{site}/w-kb1-test/files?t=" + zhang["token"], cookie="")
+    check("同事资料页按文件夹分组（有 📁 分组标题）", st == 200 and "📁" in body and "按文件夹分组" in body,
+          f"HTTP {st}")
+    check("每个文件夹都能整包下载（隐藏表单 + form 属性，不嵌套表单）",
+          'id="zf0"' in body and "打包下载这个文件夹" in body)
+    st, blob, _hd = http_bytes(f"{site}/w-kb1-test/zip", data={"t": zhang["token"], "folder": "技术"})
+    names = []
+    if st == 200:
+        import io
+        import zipfile
+        names = zipfile.ZipFile(io.BytesIO(blob)).namelist()
+    check("按文件夹整包下载能出 zip（张三在「技术」里能看到的那几篇）",
+          st == 200 and names and "拓扑说明.md" in " ".join(names), f"HTTP {st} {names[:3]}")
+    check("整包下载不越级（张三没有 L3，回收站/核心资料不进包）",
+          all("继承等级" not in n and "要挪的" not in n for n in names), str(names))
+    st, blob, _hd = http_bytes(f"{site}/w-kb1-test/zip", data={"t": zhang["token"], "folder": "不存在的文件夹"})
+    check("整包下载一个空/无权限的文件夹 → 明确拒绝，不是空包", st in (400, 403), f"HTTP {st}")
+
+    # ---- AI 侧：按文件夹检索 ----
+    r = await with_session(f"{site}/kb-{zhang['token']}",
+                           lambda s: call(s, "kb_list", {"folder": "技术"}))
+    check("AI 侧 kb_list 支持按文件夹限定 + 带 folder 字段",
+          "folder" in str(r) or "技术" in str(r), str(r)[:100])
+
+
+def _audit_rows(state: Path) -> list[dict]:
+    f = state / "audit" / "kb1.jsonl"
+    if not f.is_file():
+        return []
+    return [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
 # ---------------------------------------------------------------- ⑨ 同事管理：改等级与其它
 async def part_users(site: str, state: Path, zhang: dict):
     print("\n⑨ 同事管理页：改等级（多档）/ 有效期 / 部门备注 / 停用 / 换地址 / 改名 / 删除")
@@ -1512,6 +1668,7 @@ async def main() -> int:
         await with_session(f"{site}/kb-{zhang['token']}", link_test)
         await part_admin(site, state, lib, zhang)
         await part_upload(site, state, lib, zhang)
+        await part_folders(site, state, lib, zhang)
         await part_users(site, state, zhang)
         part_track(state, env, zhang)
     finally:

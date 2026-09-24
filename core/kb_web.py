@@ -31,6 +31,7 @@ import kb as KB
 import kb_access as ACC
 import kb_auth as AUTH
 import kb_download as DL
+import kb_folder as FOLD
 import kb_ingest as ING
 import kb_invite as INV
 import kb_usage as USAGE
@@ -228,6 +229,32 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
         margin-left: 5px; border-radius: 50%; border: 1px solid #c9cfd8; color: var(--dim); font-size: 11px;
         font-weight: 600; cursor: help; vertical-align: middle; background: #fff; flex: none; }}
   .q:hover {{ border-color: var(--accent); color: var(--accent); }}
+  /* ---- 文件夹区（面包屑 / 新建 / 列表 / 拖放）---- */
+  .dirbar {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }}
+  .dirbar .crumb {{ font-size: 14px; }}
+  .dirbar .crumb a {{ color: var(--accent); text-decoration: none; }}
+  .dirbar .crumb a:hover {{ text-decoration: underline; }}
+  .dirbar form {{ margin-left: auto; display: flex; gap: 8px; align-items: center; }}
+  table.ftable {{ width: 100%; border-collapse: collapse; }}
+  table.ftable td {{ padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }}
+  table.ftable tr.frow:hover td {{ background: var(--brandb); }}
+  table.ftable td.fname {{ font-size: 14px; }}
+  a.btnlabel {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 8px;
+        background: #eef0f4; color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 500; }}
+  a.btnlabel:hover {{ background: #e4e7ec; }}
+  /* 可编辑的显示标题（看着像文字，点进去才像输入框）*/
+  input.titlin {{ width: 100%; max-width: 420px; font: inherit; font-weight: 600; color: var(--ink);
+        background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 3px 6px; }}
+  input.titlin:hover {{ border-color: var(--line); }}
+  input.titlin:focus {{ border-color: var(--accent); background: #fff; outline: none; }}
+  table.ftable td.flev form {{ display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }}
+  /* 拖动移动：抓取把手 + 拖放目标高亮 */
+  td.grab {{ cursor: grab; }}
+  td.grab .ghandle {{ color: var(--dim); margin-right: 7px; cursor: grab; }}
+  tr.dragging td {{ opacity: .5; }}
+  tr.frow.dropok td, .dirbar .crumb a.dropok {{ background: var(--okb); outline: 2px dashed var(--ok); }}
+  .dirbar .crumb a.dropok {{ padding: 3px 8px; border-radius: 7px; }}
+
   /* 同事折叠卡：默认只看一行，点「编辑」才展开 */
   details.ucard {{ background: #fff; border: 1px solid var(--line); border-radius: 14px;
         margin: 0 0 10px; padding: 0 14px; }}
@@ -657,29 +684,52 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
 def page_files(base: str, person: str, levels: list[str], docs: list[dict], token: str,
                dcfg: dict, msg: str = "", who: str = "") -> bytes:
     """同事的「我的资料」页：能用 AI 查，也能在这儿直接把文件拿走。"""
-    rows = []
-    for d in docs:
+    def _row(d: dict) -> str:
         did = esc(d["doc_id"])
         link = f"{esc(base)}/dl/{did}?t={esc(token)}"
         orig = (f'<a href="{link}&mode=original">原件</a>'
                 if dcfg.get("original", True) else '<span class="hint">原件未开放</span>')
-        rows.append(
-            f'<tr><td><input type="checkbox" name="ids" value="{did}" style="width:auto"></td>'
-            f'<td>{esc(d.get("title") or "")}<div class="hint">{esc(d.get("category") or "未分类")}'
-            f' · {int(d.get("chars") or 0)} 字</div></td>'
-            f'<td>{esc(d.get("level") or "")}</td>'
-            f'<td>{orig} · <a href="{link}&mode=text">文本</a></td></tr>')
-    table = ("<table><tr><th style=\"width:28px\"></th><th>资料</th><th>等级</th><th>下载</th></tr>"
-             + "".join(rows) + "</table>") if rows else \
-            '<div class="warn">你的等级下暂时还没有可看的资料。需要更多请到申请页再申请。</div>'
+        return (f'<tr><td><input type="checkbox" name="ids" value="{did}" style="width:auto"></td>'
+                f'<td>{esc(d.get("title") or "")}<div class="hint">{esc(d.get("category") or "未分类")}'
+                f' · {int(d.get("chars") or 0)} 字</div></td>'
+                f'<td>{esc(d.get("level") or "")}</td>'
+                f'<td>{orig} · <a href="{link}&mode=text">文本</a></td></tr>')
+
+    # 按文件夹分组：同事按项目找东西要靠它（根目录排最前，其余按名字）
+    groups: dict[str, list[dict]] = {}
+    for d in docs:
+        groups.setdefault(str(d.get("folder") or ""), []).append(d)
+    order = [""] + sorted([f for f in groups if f])
+    hidden_forms, blocks = [], []
+    for gi, f in enumerate(order):
+        items = groups.get(f) or []
+        if not items:
+            continue
+        label = f or "根目录"
+        fid = f"zf{gi}"
+        hidden_forms.append(
+            f'<form id="{fid}" method="post" action="{esc(base)}/zip" style="display:none">'
+            f'<input type="hidden" name="t" value="{esc(token)}">'
+            f'<input type="hidden" name="folder" value="{esc(f or ".")}"></form>')
+        table = ("<table><tr><th style=\"width:28px\"></th><th>资料</th><th>等级</th><th>下载</th></tr>"
+                 + "".join(_row(d) for d in items) + "</table>")
+        blocks.append(
+            f'<details class="ucard" open><summary><b>📁 {esc(label)}</b>'
+            f'<span class="hint">{len(items)} 篇</span>'
+            f'<button type="submit" form="{fid}" class="tiny ghost" style="margin-left:auto">'
+            f'打包下载这个文件夹</button></summary>{table}</details>')
+    inner = ("".join(blocks) if blocks else
+             '<div class="warn">你的等级下暂时还没有可看的资料。需要更多请到申请页再申请。</div>')
     body = f"""{msg}
-<p class="lead">你是 <b>{esc(person)}</b>，等级：{esc("、".join(levels) or "无")}。下面是你能拿到的资料。</p>
+<p class="lead">你是 <b>{esc(person)}</b>，等级：{esc("、".join(levels) or "无")}。下面是你能拿到的资料，
+按文件夹分组；每个文件夹都能整包下载，也可以勾选几篇一起打包。</p>
 <form method="post" action="{esc(base)}/zip">
   <input type="hidden" name="t" value="{esc(token)}">
-  {table}
-  <p class="hint">勾选几篇 → 一起打包成 zip 下载；也可以直接点每行的「原件 / 文本」。</p>
+  {inner}
+  <p class="hint">勾选几篇 → 一起打包成 zip 下载；也可以直接点每行的「原件 / 文本」，或点文件夹标题右边的整包下载。</p>
   <button type="submit">打包下载勾选的资料</button>
 </form>
+{"".join(hidden_forms)}
 <h2>用 AI 也能拿文件</h2>
 <p class="hint">把你的地址（本页网址去掉 <code>/files</code>）填进 ChatGPT 等客户端的 MCP 配置，
 然后直接说「把《XX》的原件给我」，AI 会返回一条<b>限时下载链接</b>（默认 15 分钟）。
@@ -697,7 +747,8 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
     """
     q = q or {}
     cat, err = KB.load_catalog(state_root, wid)
-    docs = dict((cat or {}).get("docs") or {})
+    docs_all = dict((cat or {}).get("docs") or {})
+    docs = {k: v for k, v in docs_all.items() if v.get("status") != "trashed"}   # 回收站里的单独一区
     if err:
         return '<h2>资料</h2><div class="warn">台账读不到：' + esc(err) + '</div>'
 
@@ -706,11 +757,24 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
     f_cat = (q.get("cat") or [""])[0]
     f_lv = (q.get("level") or [""])[0]
 
+    # ---- 文件夹（= 资料目录下的真实子目录）----
+    all_dirs = FOLD.dirs_under(root, docs_rel)
+    dir_cur = (q.get("dir") or [""])[0].strip().strip("/")
+    if dir_cur and dir_cur not in all_dirs:        # 传了个不存在的文件夹 → 退回全部
+        dir_cur = ""
+    subs = FOLD.subdirs_of(all_dirs, dir_cur)
+    dcounts = FOLD.counts(docs, docs_rel)
+    crumb = FOLD.breadcrumb(dir_cur)
+    folders_map = KB.folders_map(state_root, wid)
+
     def opts(cur: str, items: list[str]) -> str:
         return "".join('<option value="' + esc(i) + '"' + (" selected" if i == cur else "") + ">"
                        + esc(i) + "</option>" for i in items)
 
     lv_opts = "".join('<option value="' + esc(lv) + '">' + esc(lv) + "</option>" for lv in levels)
+    _eff_cur = FOLD.level_for(folders_map, dir_cur, "") if dir_cur else ""
+    lv_opts_cur = "".join('<option value="' + esc(lv) + '"' + (" selected" if lv == _eff_cur else "")
+                          + ">" + esc(lv) + "</option>" for lv in levels)
     cats = sorted({(e.get("category") or "") for e in docs.values()})
     cand = sorted(docs.items(), key=lambda t: ((t[1].get("category") or ""), (t[1].get("title") or "")))
     shown = []
@@ -721,7 +785,9 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             continue
         if f_lv and (e.get("level") or "") != f_lv:
             continue
-        if kw and kw not in ((e.get("title") or "") + " " + did + " " + (e.get("rel") or "")).lower():
+        if kw and kw not in ((e.get("title") or "") + " " + did + " " + (e.get("path") or "")).lower():
+            continue
+        if dir_cur and FOLD.dir_of(e.get("path") or "", docs_rel) != dir_cur:
             continue
         shown.append((did, e))
 
@@ -743,8 +809,11 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
 
     rows = []
     for did, e in page_items:
-        title = ('<b>' + esc(e.get("title")) + "</b><br><span class=\"hint\">"
-                 + esc(e.get("category") or "-") + " · " + str(int(e.get("chars") or 0)) + " 字 · <code>"
+        title = ('<input class="titlin" name="title_' + esc(did) + '" value="' + esc(e.get("title") or "")
+                 + '" title="改完点右边的「改标题」—— 只改显示标题，磁盘文件名不动">'
+                 '<br><span class=\"hint\">'
+                 + esc(FOLD.dir_of(e.get("path") or "", docs_rel) or "根目录") + " · "
+                 + str(int(e.get("chars") or 0)) + " 字 · <code>"
                  + esc(did) + "</code></span>")
         note = e.get("note") or ""
         if note:
@@ -761,19 +830,113 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             acts = ('<button class="tiny danger" name="one" value="' + esc(did) + '@forget">移除条目</button>')
         else:
             acts = ('<button class="tiny" name="one" value="' + esc(did) + '@approve">公开</button>')
+        acts += ('<span class="sep" style="height:20px"></span>'
+                 '<button class="tiny ghost" name="one" value="' + esc(did) + '@title">改标题</button>'
+                 '<button class="tiny danger" name="one" value="' + esc(did) + '@trash"'
+                 f' onclick="return confirm(&quot;把「{esc(e.get("title") or "")}」放进回收站？30 天内可以放回。&quot;)">'
+                 "进回收站</button>")
         title += "　" + prev
-        rows.append('<tr><td><input type="checkbox" name="did" value="' + esc(did) + '" class="pick"></td>'
-                    "<td>" + title + "</td><td>" + status_chip(st) + "</td>"
+        here = FOLD.dir_of(e.get("path") or "", docs_rel)
+        dest_opts = ('<option value="">（根目录）</option>'
+                     + "".join('<option value="' + esc(d) + '">' + esc(d) + "</option>"
+                               for d in all_dirs if d != here))
+        rows.append('<tr class="docrow" data-did="' + esc(did) + '">'
+                    '<td><input type="checkbox" name="did" value="' + esc(did) + '" class="pick"></td>'
+                    '<td class="grab" draggable="true" title="按住这里拖到文件夹上就能移动">'
+                    '<span class="ghandle">⠿</span>' + title + "</td>"
+                    "<td>" + status_chip(st) + "</td>"
                     '<td><select name="level_' + esc(did) + '">' + opts(e.get("level") or levels[0], levels)
                     + "</select></td>"
+                    '<td><select name="dest_' + esc(did) + '">' + dest_opts + "</select>"
+                    '<button class="tiny ghost" name="one" value="' + esc(did) + '@move">移动</button></td>'
                     '<td class="acts"><span class="actsrow">' + acts + "</span></td></tr>")
     table = ("<table><tr><th style=\"width:28px\"><input type=\"checkbox\" id=\"all\"></th>"
-             "<th>资料</th><th>状态</th><th>等级</th><th>操作</th></tr>"
+             "<th>资料</th><th>状态</th><th>等级</th><th>文件夹</th><th>操作</th></tr>"
              + "".join(rows) + "</table>"
              + _pager(base, admin, "dp", cur, pages, total_docs, "篇资料",
                       {k2: v2[0] for k2, v2 in q.items()
-                       if k2 in ("q", "status", "cat", "level") and v2 and v2[0]})) if rows else \
-        '<p class="hint">没有符合条件的资料。换个筛选，或先上传/扫描。</p>'
+                       if k2 in ("q", "status", "cat", "level", "dir") and v2 and v2[0]})) if rows else \
+        '<p class="hint">这个文件夹里没有符合条件的资料。换个筛选、进别的文件夹，或先上传/扫描。</p>'
+
+    # ---- 文件夹区：面包屑 + 新建 + 列表（拖文件到文件夹上就能移动）----
+    frows = []
+    for nm in subs:
+        full = (dir_cur + "/" + nm) if dir_cur else nm
+        n_in = dcounts.get(full, 0)
+        n_sub = len(FOLD.subdirs_of(all_dirs, full))
+        info = f"{n_in} 篇" + (f" · {n_sub} 个子文件夹" if n_sub else "")
+        enter = (esc(base) + "/admin?k=" + esc(admin) + "&dir=" + quote(full))
+        own_lv = (folders_map.get(full) or {}).get("level") or ""
+        eff_lv = FOLD.level_for(folders_map, full, "")
+        warn = f' onclick="return confirm(&quot;把「{esc(nm)}」整个放进回收站？30 天内可以放回。&quot;)"'
+        frows.append(
+            '<tr class="frow" data-drop="' + esc(full) + '">'
+            '<td class="fname">📁 <b>' + esc(nm) + "</b><br><span class=\"hint\">" + esc(info) + "</span></td>"
+            '<td class="flev"><form class="inline" method="post" action="' + esc(base) + '/admin/flevel">'
+            '<input type="hidden" name="k" value="' + esc(admin) + '">'
+            '<input type="hidden" name="cur" value="' + esc(dir_cur) + '">'
+            '<input type="hidden" name="folder" value="' + esc(full) + '">'
+            '<select name="level" title="以后放进这个文件夹的新文件继承这个等级">'
+            '<option value="">（跟随父级/窗口默认）</option>'
+            + "".join('<option value="' + esc(lv) + '"' + (" selected" if lv == own_lv else "") + ">"
+                      + esc(lv) + "</option>" for lv in levels)
+            + '</select><button class="tiny ghost" type="submit">存默认等级</button>'
+            + (f'<span class="hint">现在生效：{esc(eff_lv)}</span>' if eff_lv else "")
+            + '</form></td>'
+            '<td class="acts"><span class="actsrow">'
+            '<a class="btnlabel" href="' + enter + '">进入</a>'
+            '<form class="inline" method="post" action="' + esc(base) + '/admin/rmdir"' + warn + ">"
+            '<input type="hidden" name="k" value="' + esc(admin) + '">'
+            '<input type="hidden" name="cur" value="' + esc(dir_cur) + '">'
+            '<input type="hidden" name="dir" value="' + esc(full) + '">'
+            '<button class="tiny danger" type="submit">删除（进回收站）</button></form>'
+            + "</span></td></tr>")
+    crumbs = " › ".join(
+        ('<b>' + esc(nm) + "</b>") if pp == dir_cur else
+        ('<a href="' + esc(base) + "/admin?k=" + esc(admin) + (("&dir=" + quote(pp)) if pp else "")
+         + '" data-drop="' + esc(pp) + '" title="也可以把文件拖到这里">' + esc(nm) + "</a>")
+        for nm, pp in crumb)
+    fsection = (
+        '<div class="dirbar"><span class="crumb">' + crumbs + "</span>"
+        '<form class="inline" method="post" action="' + esc(base) + '/admin/mkdir">'
+        '<input type="hidden" name="k" value="' + esc(admin) + '">'
+        '<input type="hidden" name="cur" value="' + esc(dir_cur) + '">'
+        '<input name="dir" maxlength="60" placeholder="新文件夹名字" required>'
+        '<button class="tiny ghost" type="submit">在当前文件夹里新建</button>'
+        + _q("文件夹就是资料目录下的真实目录（上传整个文件夹时层级会自动建出来）。"
+             "移动文件：按住资料行的 ⠿ 拖到文件夹上，或拖到面包屑的「全部资料」= 根目录；"
+             "手机上用每行的「文件夹」下拉 + 「移动」。")
+        + "</form></div>"
+        + ('<table class="ftable">' + "".join(frows) + "</table>" if frows else
+           '<p class="hint">这一层还没有子文件夹。上传整个文件夹会自动建层级，也可以点右边「新建」。</p>'))
+
+    tr_rows = FOLD.list_trash(root, docs_rel)
+    if tr_rows:
+        trows = []
+        for r in tr_rows:
+            trows.append(
+                '<tr><td class="fname"><b>' + esc(r["name"]) + '</b><br><span class="hint">原位置：'
+                + esc(r["orig"] or "-") + "</span></td>"
+                '<td>' + str(r["files"]) + ' 个文件<br><span class="hint">'
+                + str(round(r["bytes"] / 1024)) + " KB</span></td>"
+                "<td>" + esc((r["when"] or "").replace("T", " ")[:16]) + "</td>"
+                '<td class="acts"><span class="actsrow">'
+                '<form class="inline" method="post" action="' + esc(base) + '/admin/trash">'
+                '<input type="hidden" name="k" value="' + esc(admin) + '">'
+                '<input type="hidden" name="name" value="' + esc(r["name"]) + '">'
+                '<button class="tiny ghost" name="action" value="restore">放回原位</button>'
+                '<button class="tiny danger" name="action" value="purge"'
+                ' onclick="return confirm(&quot;彻底删掉就真没了，确定？&quot;)">彻底删</button>'
+                "</form></span></td></tr>")
+        tsection = ('<h3>回收站（' + str(len(tr_rows)) + '）</h3>'
+                    '<table class="ftable">' + "".join(trows) + "</table>"
+                    '<div class="bar"><form class="inline" method="post" action="' + esc(base) + '/admin/trash">'
+                    '<input type="hidden" name="k" value="' + esc(admin) + '">'
+                    '<button class="ghost" name="action" value="clean">清理 30 天前的</button></form>'
+                    + _q("删除的东西先进这里（资料目录下的 .回收站/），30 天内可以原样放回；"
+                         "「彻底删」之后就真没了。同事那边看不到回收站里的东西。") + "</div>")
+    else:
+        tsection = ""
 
     upload = (
         '<form method="post" action="' + esc(base) + '/admin/upload?k=' + esc(admin)
@@ -791,12 +954,14 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         "或用 Finder 放进资料目录再点下面的「扫描资料目录」。上限：单文件 200MB、一次共 1GB、最多 2000 个文件。")
         + '</div></div>'
         '<div class="grid2" style="margin-top:12px">'
-        '<div><label>放进哪个分类</label><select name="category">'
-        '<option value="">（资料库根目录）</option>' + "".join('<option value="' + esc(c) + '">' + esc(c)
-                                                                + "</option>" for c in cats if c)
+        '<div><label>放进哪个文件夹（当前位置：' + esc(dir_cur or "全部资料（根目录）") + '）</label>'
+        '<select name="category"><option value="">（资料库根目录）</option>'
+        + "".join('<option value="' + esc(d) + '"' + (" selected" if d == dir_cur else "") + ">"
+                  + esc(d) + "</option>" for d in all_dirs)
         + '</select></div>'
         '<div><label>或者新建一个分类名</label><input name="newcat" maxlength="40" placeholder="例如：技术方案"></div>'
-        '<div><label>这批资料的等级</label><select name="level">' + lv_opts + "</select></div>"
+        '<div><label>这批资料的等级' + (f"（跟着「{esc(dir_cur)}」的默认等级）" if _eff_cur else "")
+        + '</label><select name="level">' + lv_opts_cur + "</select></div>"
         "</div>"
         '<div class="bar">'
         '<button type="submit" name="after" value="pending">上传，先进待批</button>'
@@ -816,6 +981,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
     toolbar = (
         '<form class="inline" method="get" action="' + esc(base) + '/admin">'
         '<input type="hidden" name="k" value="' + esc(admin) + '">'
+        '<input type="hidden" name="dir" value="' + esc(dir_cur) + '">'
         '<input type="search" name="q" placeholder="搜标题 / 编号 / 路径" value="' + esc((q.get("q") or [""])[0]) + '">'
         '<select name="status"><option value="">全部状态</option>'
         + opts(f_st, ["pending", "approved", "rejected", "unsupported"])
@@ -835,9 +1001,17 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<button name="bulk" value="approve">设为公开</button>'
         '<button class="ghost" name="bulk" value="setlevel">只改等级</button>'
         '<button class="ghost" name="bulk" value="revoke">下架</button>'
+        '<label style="margin:0">移到</label><select name="dest_bulk">'
+        '<option value="">（根目录）</option>'
+        + "".join('<option value="' + esc(d) + '">' + esc(d) + "</option>" for d in all_dirs)
+        + "</select>"
+        '<button class="ghost" name="bulk" value="move">移动选中的</button>'
+        '<button class="danger" name="bulk" value="trash"'
+        ' onclick="return confirm(&quot;把选中的资料放进回收站？30 天内可以放回。&quot;)">放进回收站</button>'
         '<button class="danger" style="margin-left:auto" name="bulk" value="forget">移除条目（不删文件）</button>'
         + _q("先勾选左边小方框：「设为公开」= 按右边等级放开；「只改等级」= 已公开的换个等级；"
-             "「下架」= 回到待批（资料还在）；「移除条目」= 不再管这篇（文件不动）。") + "</div>")
+             "「下架」= 回到待批（资料还在）；「移动选中的」= 把勾选的资料挪到指定文件夹；"
+             "「移除条目」= 不再管这篇（文件不动）。") + "</div>")
 
     js = """<script>
 (function(){
@@ -943,8 +1117,39 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
 })();
 </script>"""
 
+    dragjs = ("<script>\n(function(){\n"
+              "  var BASE=" + json.dumps(base) + ", K=" + json.dumps(admin) + ";\n"
+              "  var did=null;\n"
+              "  function clear(){document.querySelectorAll('.dragging,.dropok').forEach("
+              "function(x){x.classList.remove('dragging');x.classList.remove('dropok');});}\n"
+              "  document.querySelectorAll('td.grab').forEach(function(td){\n"
+              "    var tr=td.closest('tr');\n"
+              "    td.addEventListener('dragstart',function(e){\n"
+              "      did=tr.getAttribute('data-did'); tr.classList.add('dragging');\n"
+              "      e.dataTransfer.setData('text/plain',did); e.dataTransfer.effectAllowed='move';\n"
+              "    });\n"
+              "    td.addEventListener('dragend',clear);\n"
+              "  });\n"
+              "  document.querySelectorAll('[data-drop]').forEach(function(t){\n"
+              "    t.addEventListener('dragover',function(e){ if(!did) return; e.preventDefault();"
+              " t.classList.add('dropok'); });\n"
+              "    t.addEventListener('dragleave',function(){ t.classList.remove('dropok'); });\n"
+              "    t.addEventListener('drop',function(e){\n"
+              "      e.preventDefault(); var d=did || e.dataTransfer.getData('text/plain'); clear();\n"
+              "      if(!d) return;\n"
+              "      var f=document.createElement('form'); f.method='post'; f.action=BASE+'/admin/move';\n"
+              "      [['k',K],['did',d],['dest',t.getAttribute('data-drop')]].forEach(function(x){\n"
+              "        var i=document.createElement('input'); i.type='hidden'; i.name=x[0];"
+              " i.value=x[1]; f.appendChild(i); });\n"
+              "      document.body.appendChild(f); f.submit();\n"
+              "    });\n"
+              "  });\n"
+              "})();\n</script>")
+
     return ("<h2>资料</h2><p class=\"lead\">" + stat + "</p>" + upload
             + scanform
+            + "<h3>文件夹</h3>" + fsection
+            + tsection
             + "<h3>资料清单</h3>" + toolbar
             + '<form method="post" action="' + esc(base) + '/admin/bulk">'
               '<input type="hidden" name="k" value="' + esc(admin) + '">'
@@ -956,7 +1161,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             + "</form>"
             + (f'<p class="hint">共 {len(docs)} 篇在台账里，筛选后 {len(shown)} 篇，本页显示 {len(page_items)} 篇。'
                f'资料目录：<code>{esc(str(root / docs_rel))}</code></p>')
-            + js)
+            + js + dragjs)
 
 
 def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
@@ -1405,6 +1610,8 @@ class _Portal:
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
                          "/login", "/logout", "/register", "/admin/login",
+                         "/admin/mkdir", "/admin/rmdir", "/admin/move",
+                         "/admin/flevel", "/admin/trash",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
                          "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
                          "/admin/user", "/admin/pass", "/admin/invite", "/healthz"}
@@ -1641,6 +1848,23 @@ class _Portal:
                                                 self.base), 403)
         ids = list(dict.fromkeys((self._multi or {}).get("ids") or
                                  [x for x in (form.get("ids") or "").split(",") if x]))
+        _fraw = form.get("folder")
+        if _fraw is None:
+            _fraw = (qs.get("folder") or [None])[0]
+        folder = None if _fraw is None else ("" if str(_fraw).strip() in (".", "/") else str(_fraw).strip().strip("/"))
+        if folder is not None and not ids:          # 按文件夹打包：把他能看的、这个文件夹里的都装上
+            docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+            cat, _e = KB.load_catalog(self.state_root, self.win.id)
+            for e, _f in KB.approved_entries(self.state_root, self.win.id, cat or {}, self.win.root,
+                                             self.win.check, levels):
+                fd = FOLD.dir_of(e.get("path") or "", docs_rel)
+                if fd == folder or fd.startswith(folder + "/"):
+                    ids.append(str(e.get("id") or ""))
+            ids = [x for x in dict.fromkeys(ids) if x]
+            if not ids:
+                return await self._send(send, _page("这个文件夹里没有你能拿的",
+                                                    '<div class="warn">这个文件夹里没有你等级内的资料。</div>',
+                                                    self.base), 403)
         if not ids:
             return await self._send(send, _page("没勾选", '<div class="warn">没有勾选任何资料。</div>',
                                                 self.base), 400)
@@ -1790,7 +2014,8 @@ class _Portal:
         try:
             newcat = (form.get("newcat") or "").strip()
             cat = newcat or (form.get("category") or "").strip()
-            level = str(form.get("level") or "").strip() or self.levels[0]
+            _level_form = str(form.get("level") or "").strip()      # 管理员显式选的（空=没选，按文件夹/窗口默认走）
+            level = _level_form or self.levels[0]
             after = form.get("after") or "pending"
             if level not in self.levels:
                 level = self.levels[0]
@@ -1851,7 +2076,9 @@ class _Portal:
                 await form.close()
 
         res = ING.scan_library(self.state_root, self.win.id, self.win.root, docs_rel, "auto",
-                               default_level=C.window_kb_default_level(self.cfg))
+                               default_level=C.window_kb_default_level(self.cfg),
+                               folder_levels=KB.folders_map(self.state_root, self.win.id),
+                               explicit_level=(_level_form if after != "publish" else ""))
         self.audit("kb_scan", {"extract": "auto"}, True,
                    {"actor": "admin", "ip": ip, "by": "upload", "new": res["new"],
                     "changed": res["changed"], "same": res["same"],
@@ -1911,6 +2138,100 @@ class _Portal:
                                                  who=self._who_label()))
 
     # ---- 批量/单篇的权限调整（一个表单里同时支持勾选批量与单篇按钮）----
+    def _trash_many(self, dids: list[str], ip: str) -> str:
+        """资料进回收站：文件挪进 `.回收站/`，台账条目标 trashed（**保留原状态**，可原样放回）。"""
+        docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+        cat, err = KB.load_catalog(self.state_root, self.win.id)
+        if err:
+            return '<div class="warn">台账读不到：' + esc(err) + "</div>"
+        docs = (cat or {}).get("docs") or {}
+        ok_n, errs = 0, []
+        for did in [d for d in dids if d]:
+            e = docs.get(did)
+            if not e:
+                errs.append(did + "：台账里没有这一篇")
+                continue
+            if e.get("status") == "trashed":
+                continue
+            name, why = FOLD.to_trash(self.win.root, docs_rel,
+                                      FOLD.rel_in_docs(e.get("path") or "", docs_rel))
+            if why:
+                errs.append((e.get("title") or did) + "：" + why)
+                continue
+            KB.mark_trashed(self.state_root, self.win.id, did, name)
+            ok_n += 1
+            self.audit("kb_trash", {"doc_id": did, "trash": name}, True,
+                       {"actor": "admin", "ip": ip, "title": e.get("title"),
+                        "batch": len([d for d in dids if d]) > 1})
+        if not ok_n:
+            return '<div class="warn">⛔ 没能删除：' + esc("；".join(errs[:5]) or "没有选中任何资料") + "</div>"
+        out = f'<div class="ok">✅ 已把 {ok_n} 篇放进回收站（30 天内可放回）。</div>'
+        if errs:
+            out += '<div class="warn">另有 ' + str(len(errs)) + " 篇没动：" + esc("；".join(errs[:5])) + "</div>"
+        return out
+
+    def _retitle(self, dids: list[str], form: dict, ip: str) -> str:
+        """改**显示标题**（磁盘文件名不动）。表单里是 title_<doc_id>。"""
+        cat, err = KB.load_catalog(self.state_root, self.win.id)
+        if err:
+            return '<div class="warn">台账读不到：' + esc(err) + "</div>"
+        docs = (cat or {}).get("docs") or {}
+        ok_n, errs = 0, []
+        for did in [d for d in dids if d]:
+            e = docs.get(did)
+            if not e:
+                errs.append(did + "：台账里没有这一篇")
+                continue
+            new_title = str(form.get("title_" + did) or "").strip()
+            if not new_title or new_title == (e.get("title") or ""):
+                continue
+            KB.set_title(self.state_root, self.win.id, did, new_title)
+            ok_n += 1
+            self.audit("kb_title", {"doc_id": did}, True,
+                       {"actor": "admin", "ip": ip, "was": e.get("title"), "title": new_title})
+        if not ok_n:
+            return ('<div class="warn">没有改到东西：' + esc("；".join(errs[:3])) + "</div>") if errs \
+                else '<div class="ok">标题没变（没填新的，或者填的和原来一样）。</div>'
+        return f'<div class="ok">✅ 已改 {ok_n} 篇的显示标题（磁盘文件名没动）。</div>'
+
+    def _move_many(self, dids: list[str], dest: str, ip: str) -> str:
+        """把选中的资料挪到 dest 文件夹（'' = 根目录）。
+
+        台账里的 path 跟着改（doc_id 是按路径算的，所以 id 也换），**状态/等级/审批记录原样保留**
+        —— 移动文件不算改内容，不该退回待批。重名自动加「(2)」，绝不覆盖。
+        """
+        docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+        cat, err = KB.load_catalog(self.state_root, self.win.id)
+        if err:
+            return '<div class="warn">台账读不到：' + esc(err) + "</div>"
+        docs = (cat or {}).get("docs") or {}
+        ok_n, errs = 0, []
+        for did in [d for d in dids if d]:
+            e = docs.get(did)
+            if not e:
+                errs.append(did + "：台账里没有这一篇")
+                continue
+            new_path, why = FOLD.move_file(self.win.root, docs_rel, e.get("path") or "", dest)
+            if why:
+                errs.append((e.get("title") or did) + "：" + why)
+                continue
+            try:
+                KB.set_doc_path(self.state_root, self.win.id, did, new_path)
+            except (ValueError, RuntimeError) as ex:
+                errs.append((e.get("title") or did) + "：" + str(ex))
+                continue
+            ok_n += 1
+            self.audit("kb_move", {"doc_id": did, "to": dest or "(根目录)"}, True,
+                       {"actor": "admin", "ip": ip, "title": e.get("title"), "path": new_path,
+                        "batch": len([d for d in dids if d]) > 1})
+        if not ok_n:
+            return '<div class="warn">⛔ 没能移动：' + esc("；".join(errs[:5]) or "没有选中任何资料") + "</div>"
+        out = f'<div class="ok">✅ 已把 {ok_n} 篇挪到「{esc(dest or "根目录")}」。</div>'
+        if errs:
+            out += ('<div class="warn">另有 ' + str(len(errs)) + " 篇没动：" + esc("；".join(errs[:5]))
+                    + "</div>")
+        return out
+
     async def _bulk(self, send, form: dict, admin: str, ip: str):
         dids = [d for d in (self._multi.get("did") or []) if d]
         action = str(form.get("bulk") or "")
@@ -1923,8 +2244,14 @@ class _Portal:
         target_level = str(target_level or "").strip()
         if not dids:
             return '<div class="warn">没有选中任何资料。</div>'
-        if action not in ("approve", "setlevel", "revoke", "forget", "reject"):
+        if action not in ("approve", "setlevel", "revoke", "forget", "reject", "move", "trash", "title"):
             return '<div class="warn">不认识的操作。</div>'
+        if action == "move":
+            return self._move_many(dids, str(form.get("dest_bulk") or form.get("dest") or ""), ip)
+        if action == "trash":
+            return self._trash_many(dids, ip)
+        if action == "title":
+            return self._retitle(dids, form, ip)
         if action in ("approve", "setlevel") and target_level not in self.levels:
             return '<div class="warn">等级不在本窗允许清单里。</div>'
         if action in ("approve", "setlevel") and target_level == "":
@@ -2191,11 +2518,108 @@ class _Portal:
                        f'<br><code>{esc(self._address(u["token"]))}</code></div>')
             else:
                 msg = '<div class="warn">找不到这个人。</div>'
+        if sub in ("/admin/mkdir", "/admin/rmdir", "/admin/move"):
+            docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+            cur = (form.get("cur") or "").strip().strip("/")
+            if sub == "/admin/mkdir":
+                rel, why = FOLD.mkdir(self.win.root, docs_rel, form.get("dir") or "")
+                if why:
+                    msg = '<div class="warn">⛔ 建不了：' + esc(why) + "</div>"
+                else:
+                    self.audit("kb_mkdir", {"dir": rel}, True, {"actor": "admin", "ip": ip})
+                    msg = f'<div class="ok">✅ 已新建文件夹「{esc(rel)}」。</div>'
+                    cur = rel                                     # 建完就停在新文件夹里
+            elif sub == "/admin/rmdir":
+                # 删文件夹 = 整棵进回收站（含里面的资料一起标记，30 天内可原样放回）
+                rel, why = FOLD.clean_rel(form.get("dir") or "")
+                if not why and not rel:
+                    why = "根目录不能删"
+                tname = ""
+                if not why:
+                    tname, why = FOLD.to_trash(self.win.root, docs_rel, rel)
+                if why:
+                    msg = '<div class="warn">⛔ 删不了：' + esc(why) + "</div>"
+                else:
+                    cat2, _e2 = KB.load_catalog(self.state_root, self.win.id)
+                    inside = [d for d, x in ((cat2 or {}).get("docs") or {}).items()
+                              if x.get("status") != "trashed"
+                              and (FOLD.dir_of(x.get("path") or "", docs_rel) == rel
+                                   or FOLD.dir_of(x.get("path") or "", docs_rel).startswith(rel + "/"))]
+                    for did in inside:
+                        KB.mark_trashed(self.state_root, self.win.id, did, tname)
+                    self.audit("kb_rmdir", {"dir": rel, "docs": len(inside), "trash": tname}, True,
+                               {"actor": "admin", "ip": ip})
+                    msg = (f'<div class="ok">✅ 已把文件夹「{esc(rel)}」整个放进回收站'
+                           f'（{len(inside)} 篇资料，30 天内可放回）。</div>')
+                    cur = rel.rsplit("/", 1)[0] if "/" in rel else ""
+            else:
+                dest = str(form.get("dest") or "").strip().strip("/")
+                msg = self._move_many([str(form.get("did") or "")], dest, ip)
+                cur = dest
+            qs = dict(qs)
+            qs["dir"] = [cur]                                     # 动作完成后停在目标文件夹
+
+        if sub == "/admin/flevel":
+            folder = (form.get("folder") or "").strip().strip("/")
+            level = (form.get("level") or "").strip()
+            cur = (form.get("cur") or "").strip().strip("/")
+            if level and level not in self.levels:
+                msg = '<div class="warn">等级不在本窗允许清单里。</div>'
+            else:
+                try:
+                    KB.set_folder_level(self.state_root, self.win.id, folder, level)
+                except (ValueError, RuntimeError) as e:
+                    msg = '<div class="warn">⛔ ' + esc(str(e)) + "</div>"
+                else:
+                    self.audit("kb_folder_level", {"folder": folder, "level": level}, True,
+                               {"actor": "admin", "ip": ip})
+                    msg = (f'<div class="ok">✅ 文件夹「{esc(folder)}」的默认等级：'
+                           f'{esc(level or "已清除（跟随父级/窗口默认）")}'
+                           '<br><span class="hint">只影响以后新进来的文件；已经入库的不会变。</span></div>')
+            qs = dict(qs)
+            qs["dir"] = [cur]
+
+        if sub == "/admin/trash":
+            docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+            act = (form.get("action") or "list").strip()
+            if act == "restore":
+                name = (form.get("name") or "").strip()
+                new_rel, why = FOLD.restore_trash(self.win.root, docs_rel, name)
+                if why:
+                    msg = '<div class="warn">⛔ 放不回去：' + esc(why) + "</div>"
+                else:
+                    cat, _e = KB.load_catalog(self.state_root, self.win.id)
+                    back = [d for d, e in ((cat or {}).get("docs") or {}).items()
+                            if e.get("trash") == name and e.get("status") == "trashed"]
+                    for did in back:
+                        try:
+                            KB.unmark_trashed(self.state_root, self.win.id, did, new_rel)
+                        except (ValueError, RuntimeError):
+                            KB.unmark_trashed(self.state_root, self.win.id, did, "")
+                    self.audit("kb_trash_restore", {"name": name}, True,
+                               {"actor": "admin", "ip": ip, "to": new_rel, "docs": len(back)})
+                    msg = (f'<div class="ok">✅ 已放回：{esc(new_rel)}'
+                           f'（{len(back)} 篇回到进回收站之前的状态）</div>')
+            elif act == "purge":
+                name = (form.get("name") or "").strip()
+                n, why = FOLD.purge_trash(self.win.root, docs_rel, name)
+                if why:
+                    msg = '<div class="warn">⛔ ' + esc(why) + "</div>"
+                else:
+                    self.audit("kb_trash_purge", {"name": name}, True, {"actor": "admin", "ip": ip, "count": n})
+                    msg = f'<div class="ok">✅ 彻底删掉 {n} 项（不可恢复）</div>'
+            else:
+                n, _why = FOLD.purge_trash(self.win.root, docs_rel, "", 30)
+                self.audit("kb_trash_purge", {"older_days": 30}, True, {"actor": "admin", "ip": ip, "count": n})
+                msg = (f'<div class="ok">✅ 清理完成：删掉 {n} 项 30 天前的东西</div>' if n
+                       else '<div class="ok">回收站里没有超过 30 天的东西</div>')
+
         if sub == "/admin/scan":
             docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
             import config as C
             res = ING.scan_library(self.state_root, self.win.id, self.win.root, docs_rel, "auto",
-                                   default_level=C.window_kb_default_level(self.cfg))
+                                   default_level=C.window_kb_default_level(self.cfg),
+                                   folder_levels=KB.folders_map(self.state_root, self.win.id))
             self.audit("kb_scan", {"extract": "auto"}, True,
                        {"actor": "admin", "ip": ip, "new": res["new"], "changed": res["changed"],
                         "same": res["same"], "skipped": res["skipped"], "failed": res["failed"]})

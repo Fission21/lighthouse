@@ -20,13 +20,16 @@ import hashlib
 import json
 import re
 import secrets
+import shutil
+
+import kb_folder as FOLD
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import kb_download as DL  # 下载层：门户下载页 + 限时签名链接
 
 CST = timezone(timedelta(hours=8))
-STATUSES = ("pending", "approved", "rejected", "unsupported")
+STATUSES = ("pending", "approved", "rejected", "unsupported", "trashed")
 _CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"     # 申请号/查询码用：去掉 0O1I
 
 
@@ -119,6 +122,119 @@ def upsert_doc(state_root: Path, wid: str, *, rel: str, title: str = "", categor
         "note": note or old.get("note") or "",
     }
     data["docs"][did] = rec
+    save_catalog(state_root, wid, data)
+    return rec
+
+
+def set_doc_path(state_root: Path, wid: str, did: str, new_rel: str) -> dict | None:
+    """文件在磁盘上挪了位置：台账条目跟着换 id（id = sha256(路径)，所以路径变了 id 也变）+ 挪文本缓存。
+
+    状态/等级/审批记录**原样保留** —— 移动文件不算改内容，不该退回待批。
+    """
+    data, err = load_catalog(state_root, wid)
+    if err:
+        raise RuntimeError(err)
+    docs = data["docs"] or {}
+    rec = docs.get(did)
+    if not rec:
+        return None
+    new_id = doc_id(new_rel)
+    if new_id in docs and new_id != did:
+        raise ValueError("目标位置已经有同名的条目了（先处理那一条）")
+    old_text = rec.get("text") or ""
+    new_text = old_text
+    if old_text:
+        src_t = text_path(state_root, wid, old_text)
+        dst_t = text_path(state_root, wid, f"text/{new_id}.md")
+        if src_t.is_file() and not dst_t.exists():
+            dst_t.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src_t), str(dst_t))
+            new_text = f"text/{new_id}.md"
+    rec["path"] = new_rel
+    rec["id"] = new_id
+    rec["text"] = new_text
+    docs[new_id] = rec
+    if new_id != did:
+        docs.pop(did, None)
+    data["docs"] = docs
+    save_catalog(state_root, wid, data)
+    return rec
+
+
+def folders_map(state_root: Path, wid: str) -> dict:
+    """台账里的 folders 段：{文件夹相对路径: {"level": "L2-技术", "note": ""}}。"""
+    data, err = load_catalog(state_root, wid)
+    if err:
+        return {}
+    return dict((data or {}).get("folders") or {})
+
+
+def set_folder_level(state_root: Path, wid: str, folder: str, level: str = "") -> dict:
+    """设/清一个文件夹的默认等级（新进来的文件继承它；台账仍逐篇记录）。"""
+    data, err = load_catalog(state_root, wid)
+    if err:
+        raise RuntimeError(err)
+    folders = data.setdefault("folders", {})
+    f = (folder or "").strip().strip("/")
+    if not f:
+        raise ValueError("根目录没有默认等级 —— 请给具体文件夹设置")
+    if level:
+        folders[f] = dict(folders.get(f) or {}, level=level)
+    else:
+        folders.pop(f, None)
+    data["folders"] = folders
+    save_catalog(state_root, wid, data)
+    return folders.get(f) or {}
+
+
+def set_title(state_root: Path, wid: str, did: str, title: str) -> dict | None:
+    """只改**显示标题**，不动磁盘文件名（doc_id 按路径算，改磁盘名会打乱判重与已发链接）。"""
+    data, err = load_catalog(state_root, wid)
+    if err:
+        raise RuntimeError(err)
+    rec = (data["docs"] or {}).get(did)
+    if not rec:
+        return None
+    rec["title"] = (title or "").strip() or rec.get("title") or ""
+    save_catalog(state_root, wid, data)
+    return rec
+
+
+def mark_trashed(state_root: Path, wid: str, did: str, trash_name: str) -> dict | None:
+    """进回收站：记下原来在哪、原来是啥状态，方便原样放回来。"""
+    data, err = load_catalog(state_root, wid)
+    if err:
+        raise RuntimeError(err)
+    rec = (data["docs"] or {}).get(did)
+    if not rec:
+        return None
+    if rec.get("status") != "trashed":
+        rec["prev_status"] = rec.get("status") or "pending"
+    rec["status"] = "trashed"
+    rec["trash"] = trash_name
+    save_catalog(state_root, wid, data)
+    return rec
+
+
+def unmark_trashed(state_root: Path, wid: str, did: str, new_rel: str = "") -> dict | None:
+    """从回收站放回来：状态回到进回收站之前那个。"""
+    data, err = load_catalog(state_root, wid)
+    if err:
+        raise RuntimeError(err)
+    docs = data["docs"] or {}
+    rec = docs.get(did)
+    if not rec:
+        return None
+    rec["status"] = rec.pop("prev_status", None) or "pending"
+    rec.pop("trash", None)
+    if new_rel and new_rel != rec.get("path"):
+        new_id = doc_id(new_rel)
+        if new_id in docs and new_id != did:
+            raise ValueError("原位已经有同名的条目了")
+        rec["path"] = new_rel
+        rec["id"] = new_id
+        docs[new_id] = rec
+        docs.pop(did, None)
     save_catalog(state_root, wid, data)
     return rec
 
@@ -228,10 +344,15 @@ def pending_requests(state_root: Path, wid: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------- 闸门
-def entry_public_view(e: dict) -> dict:
-    """给外部 AI 看的一篇资料元数据 —— **绝不含内部路径**。"""
+def entry_public_view(e: dict, docs_rel: str = "") -> dict:
+    """给外部 AI / 同事看的资料元数据 —— **绝不含内部磁盘路径**。
+
+    带 `folder`（资料库里的文件夹名，如「技术/子方案」）：同事按项目找东西要靠它，
+    AI 也能用 folder 参数限定检索范围。空串 = 根目录。
+    """
     return {"doc_id": e.get("id"), "title": e.get("title") or "",
             "category": e.get("category") or "", "level": e.get("level") or "",
+            "folder": FOLD.dir_of(e.get("path") or "", docs_rel) if docs_rel else "",
             "tags": list(e.get("tags") or []), "chars": int(e.get("chars") or 0)}
 
 
@@ -332,25 +453,33 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
         return dump({"window": win.id, "title": win.title, "mode": "controlled-library",
                      "you": {"name": principal_getter(), "levels": _levels()},
                      "visible_docs": len(docs), "categories": cats, "levels": lvls,
-                     "how_to_use": "先用 kb_search 定位关键词，再用 kb_read(doc_id, offset, limit) 读正文（分页）。"
+                     "how_to_use": "先用 kb_search 定位关键词（可用 folder 限定某个文件夹），"
+                                   "再用 kb_read(doc_id, offset, limit) 读正文（分页）。"
                                    "要让对方拿到原文件，用 kb_link(doc_id) 取一条限时下载链接（只读，不能改）。",
                      "note": "清单之外的内容不在你的授权范围内，也查不到编号。需要更多请联系资料维护者。"})
 
-    @server.tool(description="列出你可访问的资料清单（可按分类/等级/标签/标题关键词过滤）。不含内部路径。")
+    _docs_rel = str((win.cfg.get("kb") or {}).get("docs_dir") or "原始文档")
+
+    @server.tool(description="列出你可访问的资料清单（可按文件夹/分类/等级/标签/标题关键词过滤）。"
+                             "folder 用文件夹名或前缀，例如 folder=\"技术\" 看技术文件夹（含子文件夹）里的资料。")
     def kb_list(query: str = "", category: str = "", level: str = "", tag: str = "",
-                limit: int = 50, offset: int = 0) -> str:
+                folder: str = "", limit: int = 50, offset: int = 0) -> str:
         cat, err = _cat()
         if err:
             audit("kb_list", {}, False, {"reason": err})
             return dump({"window": win.id, "error": err})
         visible = approved_entries(state_root, win.id, cat, win.root, win.check, _levels())
-        docs = [entry_public_view(e) for e, _ in visible]
+        docs = [entry_public_view(e, _docs_rel) for e, _ in visible]
         _dl = DL.download_cfg(win.cfg)
         for d in docs:                      # 告诉 AI：这篇能不能直接给下载链接
             d["download"] = bool(_dl["enabled"])
         q = (query or "").strip().lower()
         if q:
             docs = [d for d in docs if q in (d["title"] or "").lower()]
+        if folder:
+            f = folder.strip().strip("/")
+            docs = [d for d in docs
+                    if d.get("folder") == f or str(d.get("folder") or "").startswith(f + "/")]
         if category:
             docs = [d for d in docs if d["category"] == category]
         if level:
@@ -395,7 +524,7 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
                      "note": "这是限时链接（到期自动失效）；转发给谁都行，但只会失效不会延长。"})
 
     @server.tool(description="在你可访问的资料里检索关键词（多关键词=全部命中）。越权/未公开资料不会命中；片段自动脱敏。")
-    def kb_search(keyword: str, limit: int = 20) -> str:
+    def kb_search(keyword: str, folder: str = "", limit: int = 20) -> str:
         kws = [k for k in re.split(r"[,，\s]+", keyword or "") if k]
         if not kws:
             audit("kb_search", {"keyword": keyword}, False, {"reason": "空关键词"})
@@ -407,7 +536,12 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
         lim = max(1, min(int(limit or 20), 50))
         hits: list = []
         scanned = 0
+        _f = (folder or "").strip().strip("/")
         for e, tp in approved_entries(state_root, win.id, cat, win.root, win.check, _levels()):
+            if _f:
+                _fd = FOLD.dir_of(e.get("path") or "", _docs_rel)
+                if _fd != _f and not _fd.startswith(_f + "/"):
+                    continue
             scanned += 1
             try:
                 body = tp.read_text(encoding="utf-8", errors="replace")
@@ -417,6 +551,7 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
                 if all(k.lower() in line.lower() for k in kws):
                     text, _ = redact(line.strip()[:240])
                     hits.append({"doc_id": e.get("id"), "title": e.get("title"),
+                                 "folder": FOLD.dir_of(e.get("path") or "", _docs_rel),
                                  "level": e.get("level"), "line": ln, "text": text})
                     if len(hits) >= lim:
                         break

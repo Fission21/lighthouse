@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,7 @@ sys.path.insert(0, str(ROOT / "core"))
 import kb as KB  # noqa: E402
 import kb_access as ACC
 import kb_auth as AUTH
+import kb_folder as FOLD
 import kb_ingest as ING  # noqa: E402
 import kb_invite as INV
 import kb_usage as USAGE  # noqa: E402
@@ -185,7 +187,8 @@ def cmd_scan(a) -> int:
         print(f"❌ 资料目录不存在: {docs_dir}")
         return 1
     res = ING.scan_library(state, a.window, root, C.window_kb_docs_dir(cfg), a.extract,
-                            default_level=C.window_kb_default_level(cfg))
+                            default_level=C.window_kb_default_level(cfg),
+                            folder_levels=KB.folders_map(state, a.window))
     if not res["total"]:
         print(f"（{docs_dir} 里没有文件）")
         return 0
@@ -738,6 +741,268 @@ def cmd_invite(a) -> int:
 
 
 # ---------------------------------------------------------------- 汇报 / 用量
+def cmd_mkdir(a) -> int:
+    """新建文件夹（资料目录下的真实目录）。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    rel, why = FOLD.mkdir(root, docs_rel, a.path)
+    if why:
+        print(f"❌ 建不了：{why}")
+        return 1
+    _audit(state, a.window, "kb_mkdir", {"dir": rel}, True, {"actor": "cli"})
+    print(f"✅ 已建文件夹：{rel}")
+    print(f"   {root / docs_rel / rel}")
+    return 0
+
+
+def _find_doc(state: Path, wid: str, key: str) -> tuple[str, dict] | None:
+    """按 doc_id / 完整标题 / 模糊词找一篇（模糊命中多篇时打印候选并返回 None）。"""
+    cat, err = KB.load_catalog(state, wid)
+    docs = ((cat or {}).get("docs") or {}) if not err else {}
+    if key in docs:
+        return key, docs[key]
+    exact = [(d, e) for d, e in docs.items() if (e.get("title") or "") == key]
+    if len(exact) == 1:
+        return exact[0]
+    low = (key or "").lower()
+    hits = [(d, e) for d, e in docs.items()
+            if low and low in ((e.get("title") or "") + " " + (e.get("path") or "")).lower()]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        print(f"❌ 台账里没有匹配「{key}」的资料")
+    else:
+        print(f"❌ 匹配到 {len(hits)} 篇，请用 doc_id 指明：")
+        for d, e in hits[:10]:
+            print(f"   {d}  {e.get('title')}")
+    return None
+
+
+def cmd_mv(a) -> int:
+    """把一篇资料挪到某个文件夹（台账 path/id 跟着改，状态等级不动）。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    hit = _find_doc(state, a.window, a.doc)
+    if not hit:
+        return 1
+    did, e = hit
+    new_path, why = FOLD.move_file(root, docs_rel, e.get("path") or "", a.to or "")
+    if why:
+        print(f"❌ 移不了：{why}")
+        return 1
+    if new_path == (e.get("path") or ""):
+        print(f"（{e.get('title')} 已经在「{a.to or '根目录'}」里了）")
+        return 0
+    KB.set_doc_path(state, a.window, did, new_path)
+    _audit(state, a.window, "kb_move", {"doc_id": did, "to": a.to or "(根目录)"}, True,
+           {"actor": "cli", "title": e.get("title"), "path": new_path})
+    print(f"✅ {e.get('title')} → 「{a.to or '根目录'}」")
+    print(f"   {new_path}")
+    return 0
+
+
+def cmd_title(a) -> int:
+    """只改显示标题（磁盘文件名不动）。"""
+    cfg, root, state = _win(a.window)
+    hit = _find_doc(state, a.window, a.doc)
+    if not hit:
+        return 1
+    did, e = hit
+    rec = KB.set_title(state, a.window, did, a.title)
+    if not rec:
+        print("❌ 台账里没有这一篇")
+        return 1
+    _audit(state, a.window, "kb_title", {"doc_id": did}, True,
+           {"actor": "cli", "title": rec.get("title"), "was": e.get("title")})
+    print(f"✅ 标题：{e.get('title')} → {rec.get('title')}")
+    print(f"   （磁盘文件名没动：{Path(rec.get('path') or '').name}）")
+    return 0
+
+
+def cmd_flevel(a) -> int:
+    """看/设/清文件夹的默认等级（新进来的文件继承它）。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    folders = KB.folders_map(state, a.window)
+    if a.folder and (a.level or a.clear):
+        if a.level and a.level not in C.window_kb_levels(cfg):
+            print(f"❌ 等级不在本窗清单里：{a.level}（可用：{'、'.join(C.window_kb_levels(cfg))}）")
+            return 1
+        try:
+            KB.set_folder_level(state, a.window, a.folder, "" if a.clear else a.level)
+        except (ValueError, RuntimeError) as e:
+            print(f"❌ {e}")
+            return 1
+        _audit(state, a.window, "kb_folder_level", {"folder": a.folder, "level": a.level}, True,
+               {"actor": "cli"})
+        print(f"✅ 文件夹「{a.folder}」的默认等级：{a.level or '（已清除）'}")
+        return 0
+    if a.folder:
+        lv = FOLD.level_for(folders, a.folder, "")
+        print(f"文件夹「{a.folder}」默认等级：{lv or '（没设）'}")
+        return 0
+    dirs = FOLD.dirs_under(root, docs_rel)
+    if not dirs:
+        print("（还没有子文件夹）")
+        return 0
+    print(f"资料目录：{root / docs_rel}\n")
+    for d in dirs:
+        own = (folders.get(d) or {}).get("level") or ""
+        eff = FOLD.level_for(folders, d, "")
+        mark = "·" if own else " "
+        print(f" {mark} {d:<28} {own or '—':<10} 生效：{eff or '（跟随窗口默认）'}")
+    print("\n· = 自己设了等级；没设的向上继承父文件夹，都没有就用窗口默认")
+    print(f"设：{CLI} kb flevel {a.window} <文件夹> <等级>   清：{CLI} kb flevel {a.window} <文件夹> --clear")
+    return 0
+
+
+def cmd_trash(a) -> int:
+    """回收站：看 / 放回 / 彻底删。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    if a.restore:
+        new_rel, why = FOLD.restore_trash(root, docs_rel, a.restore)
+        if why:
+            print(f"❌ 放不回去：{why}")
+            return 1
+        cat, _ = KB.load_catalog(state, a.window)
+        for did, e in list(((cat or {}).get("docs") or {}).items()):
+            if e.get("trash") == a.restore and e.get("status") == "trashed":
+                KB.unmark_trashed(state, a.window, did, new_rel if e.get("path") == new_rel else "")
+        _audit(state, a.window, "kb_trash_restore", {"name": a.restore}, True, {"actor": "cli", "to": new_rel})
+        print(f"✅ 已放回：{new_rel}")
+        print("   （放回来的条目状态回到进回收站之前；若文件路径变了，重新 scan 一次更稳）")
+        return 0
+    if a.purge or a.purge_older:
+        n, why = FOLD.purge_trash(root, docs_rel, a.purge or "", a.purge_older or 0)
+        if why:
+            print(f"❌ {why}")
+            return 1
+        _audit(state, a.window, "kb_trash_purge", {"name": a.purge, "older_days": a.purge_older}, True,
+               {"actor": "cli", "count": n})
+        print(f"✅ 彻底删掉 {n} 项")
+        return 0
+    rows = FOLD.list_trash(root, docs_rel)
+    if not rows:
+        print("回收站是空的")
+        return 0
+    print(f"回收站（{root / docs_rel / '.回收站'}）\n")
+    for r in rows:
+        print(f"  {r['name']:<34} 原位置 {r['orig'] or '-':<24} "
+              f"{r['files']} 个文件 / {r['bytes'] // 1024} KB   {r['when'][:16].replace('T', ' ')}")
+    print(f"\n放回：{CLI} kb trash {a.window} --restore <名字>   彻底删：--purge <名字>   清 30 天前的：--purge-older 30")
+    return 0
+
+
+# 归类建议：文件名 → 目标文件夹的关键词表（人工可改）
+_SUGGEST_RULES = [
+    (("报价", "价格", "商务", "费用", "预算"), "商务"),
+    (("技术", "方案", "参数", "架构", "算法", "接口", "部署", "运维"), "技术"),
+    (("资质", "证书", "营业执照", "授权", "认证", "信用"), "资质"),
+    (("合同", "协议", "条款", "签署"), "合同"),
+    (("公示", "公告", "通知", "中标", "招标", "投标"), "公示"),
+    (("验收", "交付", "清单", "记录"), "交付"),
+]
+
+
+def _suggest_moves(state: Path, wid: str, root: Path, docs_rel: str) -> list[dict]:
+    """按文件名给归类建议（只提议，不动文件）。已有同名文件夹优先，否则建议新建。"""
+    cat, _ = KB.load_catalog(state, wid)
+    docs = (cat or {}).get("docs") or {}
+    dirs = FOLD.dirs_under(root, docs_rel)
+    flat = {d.split("/")[-1]: d for d in dirs}
+    out = []
+    for did, e in docs.items():
+        if e.get("status") == "trashed":
+            continue
+        here = FOLD.dir_of(e.get("path") or "", docs_rel)
+        title = (e.get("title") or "") + " " + Path(e.get("path") or "").name
+        want, why = "", ""
+        for words, folder in _SUGGEST_RULES:
+            hit = next((w for w in words if w in title), "")
+            if hit:
+                want, why = flat.get(folder, folder), f"文件名里有「{hit}」"
+                break
+        if not want:
+            m = re.search(r"20\d\d", title)
+            if m:
+                want, why = flat.get(m.group(0), m.group(0)), f"文件名里有年份 {m.group(0)}"
+        if want and want != here:
+            out.append({"doc_id": did, "title": e.get("title"), "from": here, "to": want,
+                        "why": why, "exists": want in dirs})
+    return out
+
+
+def cmd_suggest(a) -> int:
+    """出「归类建议」（AI/规则提议，人来定）—— 只写方案文件，不动任何文件。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    moves = _suggest_moves(state, a.window, root, docs_rel)
+    plan = {"window": a.window, "generated_at": KB.now_iso(), "docs_dir": str(root / docs_rel),
+            "moves": moves}
+    if not moves:
+        print("没有可建议的归类（都已在看起来合适的文件夹里，或文件名里没有线索）")
+        return 0
+    print(f"归类建议（{len(moves)} 条，**没有动任何文件**）\n")
+    for m in moves:
+        tag = "已有" if m["exists"] else "需新建"
+        print(f"  {m['title'][:34]:<36} {m['from'] or '（根目录）':<16} → {m['to']:<16} [{tag}] {m['why']}")
+    out = a.write or str(KB.kb_root(state, a.window) / "suggest.json")
+    Path(out).write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"\n方案已写到：{out}")
+    print(f"看一遍没问题就执行：{CLI} kb apply {a.window} {out}    （先演练：加 --dry-run）")
+    return 0
+
+
+def cmd_apply(a) -> int:
+    """执行归类方案（plan.json）。--dry-run 只打印不动手。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    try:
+        plan = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"❌ 读不了方案文件：{e}")
+        return 1
+    moves = plan.get("moves") or []
+    if not moves:
+        print("方案里没有要移动的条目")
+        return 0
+    ok_n, errs = 0, []
+    made = set()
+    for m in moves:
+        did, to = m.get("doc_id") or "", (m.get("to") or "").strip().strip("/")
+        cat, _ = KB.load_catalog(state, a.window)
+        e = ((cat or {}).get("docs") or {}).get(did)
+        if not e:
+            errs.append(f"{m.get('title') or did}：台账里没有这一篇")
+            continue
+        if a.dry_run:
+            print(f"  [演练] {e.get('title')} → {to or '（根目录）'}")
+            ok_n += 1
+            continue
+        if to and to not in made and not (root / docs_rel / to).is_dir():
+            _rel, why = FOLD.mkdir(root, docs_rel, to)
+            if why:
+                errs.append(f"建文件夹 {to}：{why}")
+                continue
+            made.add(to)
+        new_path, why = FOLD.move_file(root, docs_rel, e.get("path") or "", to)
+        if why:
+            errs.append(f"{e.get('title')}：{why}")
+            continue
+        KB.set_doc_path(state, a.window, did, new_path)
+        _audit(state, a.window, "kb_move", {"doc_id": did, "to": to or "(根目录)"}, True,
+               {"actor": "cli:apply", "title": e.get("title"), "path": new_path})
+        ok_n += 1
+    head = "演练完成（什么都没动）" if a.dry_run else "执行完成"
+    print(f"✅ {head}：{ok_n} 条")
+    for e in errs[:10]:
+        print(f"  ⛔ {e}")
+    if errs:
+        print(f"  （另有 {max(0, len(errs) - 10)} 条没列出）")
+    return 0 if not errs else 1
+
+
 def cmd_notify(a) -> int:
     _cfg, _root, state = _win(a.window)
     data, err = KB.load_requests(state, a.window)
@@ -846,6 +1111,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--enable", action="store_true"); p.add_argument("--delete", action="store_true")
     p.set_defaults(fn=cmd_code_off)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("mkdir"); p.add_argument("window"); p.add_argument("path"); p.set_defaults(fn=cmd_mkdir)
+    p = sub.add_parser("mv"); p.add_argument("window"); p.add_argument("doc"); p.add_argument("--to", default=""); p.set_defaults(fn=cmd_mv)
+    p = sub.add_parser("title"); p.add_argument("window"); p.add_argument("doc"); p.add_argument("title"); p.set_defaults(fn=cmd_title)
+    p = sub.add_parser("flevel"); p.add_argument("window"); p.add_argument("folder", nargs="?"); p.add_argument("level", nargs="?"); p.add_argument("--clear", action="store_true"); p.set_defaults(fn=cmd_flevel)
+    p = sub.add_parser("trash"); p.add_argument("window"); p.add_argument("--restore"); p.add_argument("--purge"); p.add_argument("--purge-older", type=int, dest="purge_older", default=0); p.set_defaults(fn=cmd_trash)
+    p = sub.add_parser("suggest"); p.add_argument("window"); p.add_argument("--write"); p.set_defaults(fn=cmd_suggest)
+    p = sub.add_parser("apply"); p.add_argument("window"); p.add_argument("plan"); p.add_argument("--dry-run", action="store_true", dest="dry_run"); p.set_defaults(fn=cmd_apply)
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)
     p = sub.add_parser("admin-url"); p.add_argument("window"); p.add_argument("--rotate", action="store_true"); p.set_defaults(fn=cmd_admin_url)

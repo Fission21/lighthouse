@@ -18,7 +18,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import kb as KB  # 台账读写（kb.py 不反向依赖本模块，无循环）
+import kb as KB
+import kb_folder as FOLD  # 台账读写（kb.py 不反向依赖本模块，无循环）
 
 SUPPORTED_TEXT = {".md", ".txt", ".markdown"}
 SUPPORTED_TEXTUTIL = {".docx", ".doc", ".rtf", ".odt", ".html", ".htm"}
@@ -151,7 +152,8 @@ def walk_docs(docs_dir: Path) -> list[Path]:
 
 
 def scan_library(state: Path, wid: str, root: Path, docs_rel: str, extract_mode: str = "auto",
-                 default_level: str = "") -> dict:
+                 default_level: str = "", folder_levels: dict | None = None,
+                 explicit_level: str = "") -> dict:
     """把资料目录同步进台账：新增 → pending；内容变了 → 退回 pending；没变 → 跳过。
 
     返回 {"rows": [(标记, 相对路径, 说明)], "new/changed/same/skipped/failed": int, "docs_dir": str}
@@ -169,7 +171,9 @@ def scan_library(state: Path, wid: str, root: Path, docs_rel: str, extract_mode:
         rel = str(f.relative_to(root))
         did = KB.doc_id(rel)
         cat_name = f.parent.name if f.parent != docs_dir else ""
-        lvl = default_level or ""          # 等级来自窗口配置，不是分类名
+        fdir = "" if f.parent == docs_dir else f.parent.relative_to(docs_dir).as_posix()
+        # 等级：先看这个文件夹（含父文件夹）的默认等级，没有再用窗口默认
+        lvl = explicit_level or FOLD.level_for(folder_levels or {}, fdir, default_level or "")
         if f.suffix.lower() not in supported_exts():
             KB.upsert_doc(state, wid, rel=rel, category=cat_name, level=lvl, status="unsupported",
                           note=f"暂不支持的类型 {f.suffix}（需人工转成 .md/.txt）", keep_status=False)
