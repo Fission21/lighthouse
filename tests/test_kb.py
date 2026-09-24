@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1063,6 +1064,58 @@ async def part_users(site: str, state: Path, zhang: dict):
     rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     for tool in ("kb_user_update", "kb_rotate", "kb_user_delete"):
         check(f"审计留痕：{tool}", any(r.get("tool") == tool and r.get("actor") == "admin" for r in rows))
+
+    # ⑪ 界面：折叠 + 悬停提示 + 分页
+    st, body = http(f"{base}/admin?k={admin}")
+    check("同事是一行折叠卡（默认收起：点「编辑」才展开表单）",
+          st == 200 and '<details class="ucard">' in body and 'class="caret"' in body
+          and 'form class="box"' in body, f"HTTP {st}")
+    check("小字说明改成鼠标悬停提示（? 气泡带 title）",
+          st == 200 and 'class="q" title=' in body)
+    check("折叠卡默认不展开（没有 open 属性）", '<details class="ucard" open' not in body)
+
+    for i in range(1, 10):                                    # 造 9 位，凑出第 2 页
+        ACC.upsert_user(state, "kb1", f"分页测试{i}", ["L1-商务"], note="分页自检")
+    total_users = len(ACC.list_users(state, "kb1"))
+    n_pages = max(1, (total_users + 7) // 8)
+    st1, b1 = http(f"{base}/admin?k={admin}&pg=1")
+    st2, b2 = http(f"{base}/admin?k={admin}&pg=2")
+    n1 = len(re.findall(r'<span class="name">', b1))
+    n2 = len(re.findall(r'<span class="name">', b2))
+    check("同事列表分页：第 1 页最多 8 位，并写着第 1/N 页",
+          st1 == 200 and f"第 1/{n_pages} 页" in b1 and n1 == 8, f"HTTP {st1} 本页 {n1} 位/{total_users}")
+    check("同事列表分页：第 2 页拿到剩下的人（不重不漏，够的人都能翻到）",
+          st2 == 200 and f"第 2/{n_pages} 页" in b2 and n1 + n2 == min(2 * 8, total_users),
+          f"HTTP {st2} 本页 {n2} 位 / 共 {total_users}")
+    check("分页链接带着管理令（翻页不会掉权限）", "pg=2" in b1 and "k=" in b1)
+
+    st, body = http(f"{base}/admin?k={admin}&pg=abc")          # 页码被乱改也不崩
+    check("页码填垃圾值 → 回到第 1 页，不报错",
+          st == 200 and f"第 1/{n_pages} 页" in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin?k={admin}&pg=999")          # 页码越界 → 夹到最后一页
+    check("页码越界 → 夹到最后一页，不报错",
+          st == 200 and f"第 {n_pages}/{n_pages} 页" in body, f"HTTP {st}")
+
+    for i in range(1, 22):                                     # 资料凑到 20 篇以上
+        KB.upsert_doc(state, "kb1", rel=f"原始文档/分页自检/资料{i}.md", category="分页自检",
+                      level="L1-商务", status="pending", chars=10)
+    st3, b3 = http(f"{base}/admin?k={admin}&dp=2")
+    check("资料列表也分页（第 2 页有内容，且标着总页数）",
+          st3 == 200 and "篇资料 · 第 2/" in b3, f"HTTP {st3}")
+    st4, b4 = http(f"{base}/admin?k={admin}&status=pending&dp=1")
+    check("分页时保留筛选条件（status=pending 仍生效）",
+          st4 == 200 and "篇资料 · 第 1/" in b4, f"HTTP {st4}")
+
+    for i in range(1, 10):                                     # 收尾
+        ACC.delete_user(state, "kb1", f"分页测试{i}")
+    cat0, _ = KB.load_catalog(state, "kb1")
+    for did0 in [k for k, e in (cat0.get("docs") or {}).items()
+                 if (e.get("category") or "") == "分页自检"]:
+        cat0["docs"].pop(did0)
+    KB.save_catalog(state, "kb1", cat0)
+    st, body = http(f"{base}/admin?k={admin}")
+    check("自检数据清干净（分页测试的人都不在了）",
+          st == 200 and "分页测试" not in body, f"HTTP {st}")
 
 # ---------------------------------------------------------------- ⑩ 登录闸门与账号
 async def part_auth(site: str, state: Path, admin_pw: str):
