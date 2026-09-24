@@ -819,6 +819,34 @@ def cmd_title(a) -> int:
     return 0
 
 
+def cmd_rmdir(a) -> int:
+    """删文件夹 = 整棵进回收站（和网页上「删除（进回收站）」同一套语义）。"""
+    cfg, root, state = _win(a.window)
+    docs_rel = C.window_kb_docs_dir(cfg)
+    rel, why = FOLD.clean_rel(a.path)
+    if not why and not rel:
+        why = "根目录不能删"
+    tname = ""
+    if not why:
+        tname, why = FOLD.to_trash(root, docs_rel, rel)
+    if why:
+        print(f"❌ 删不了：{why}")
+        return 1
+    cat, _ = KB.load_catalog(state, a.window)
+    inside = [d for d, x in ((cat or {}).get("docs") or {}).items()
+              if x.get("status") != "trashed"
+              and (FOLD.dir_of(x.get("path") or "", docs_rel) == rel
+                   or FOLD.dir_of(x.get("path") or "", docs_rel).startswith(rel + "/"))]
+    for did in inside:
+        KB.mark_trashed(state, a.window, did, tname)
+    _audit(state, a.window, "kb_rmdir", {"dir": rel, "docs": len(inside), "trash": tname}, True,
+           {"actor": "cli"})
+    print(f"✅ 文件夹「{rel}」整个进了回收站（{len(inside)} 篇资料，30 天内可放回）")
+    print(f"   回收站名字：{tname}")
+    print(f"   放回：kb trash {a.window} --restore {tname}    ｜    彻底删：kb trash {a.window} --purge {tname}")
+    return 0
+
+
 def cmd_flevel(a) -> int:
     """看/设/清文件夹的默认等级（新进来的文件继承它）。"""
     cfg, root, state = _win(a.window)
@@ -1173,6 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_code_off)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("mkdir"); p.add_argument("window"); p.add_argument("path"); p.set_defaults(fn=cmd_mkdir)
+    p = sub.add_parser("rmdir"); p.add_argument("window"); p.add_argument("path"); p.set_defaults(fn=cmd_rmdir)
     p = sub.add_parser("mv"); p.add_argument("window"); p.add_argument("doc"); p.add_argument("--to", default=""); p.set_defaults(fn=cmd_mv)
     p = sub.add_parser("title"); p.add_argument("window"); p.add_argument("doc"); p.add_argument("title"); p.set_defaults(fn=cmd_title)
     p = sub.add_parser("flevel"); p.add_argument("window"); p.add_argument("folder", nargs="?"); p.add_argument("level", nargs="?"); p.add_argument("--clear", action="store_true"); p.set_defaults(fn=cmd_flevel)

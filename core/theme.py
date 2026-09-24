@@ -88,8 +88,8 @@ TOKENS = """
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
     /* 圆角 */
     --r1: 7px; --r2: 10px; --r3: 14px; --r4: 999px;
-    /* 字号 */
-    --f1: 12px; --f2: 13px; --f3: 15px; --f4: 17px; --f5: 22px;
+    /* 字号：按 Refactoring UI 的推荐刻度 12/14/16/18/24（手调、不用数学比例） */
+    --f1: 12px; --f2: 14px; --f3: 16px; --f4: 18px; --f5: 24px;
     /* 结构中性色：输入框描边、灰按钮、代码底色 —— 三套主题通用 */
     --line2: #d5d8de; --btn2: #eceef2; --btn2h: #e2e5ea;
     --th-bg: color-mix(in srgb, var(--brand) 4%, #fff);

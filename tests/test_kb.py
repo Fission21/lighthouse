@@ -490,7 +490,7 @@ def part_web(base_url: str, state: Path, admin_pw: str = ""):
     check("带云端转发头访问管理页 → 403（公网打不到）", st == 403, str(st))
     st, _ = http(f"{base_url}/admin", cookie="")
     check("本机但无管理令、也没登录 → 401", st == 401, str(st))
-    st, body = http(f"{base_url}/admin?k={admin}")
+    st, body = http(f"{base_url}/admin/people?k={admin}")
     check("本机 + 管理令 → 管理页打开", st == 200 and "待批申请" in body, str(st))
     check("管理页列出待批申请（赵六）", "赵六" in body)
 
@@ -1003,8 +1003,8 @@ async def part_folders(site: str, state: Path, lib: Path, zhang: dict):
     st, body = http(f"{base}/admin?k=" + admin)
     _dd = 'data-drop="归档 2026"'
     check("面板里出现文件夹行（可拖放 + 可设默认等级 + 可删）",
-          _dd in body and "存默认等级" in body and "删除（进回收站）" in body,
-          f"drop={_dd in body} 等级={'存默认等级' in body} 删={'删除（进回收站）' in body}")
+          _dd in body and ">存</button>" in body and ">删除</button>" in body,
+          f"drop={_dd in body} 等级={'>存</button>' in body} 删={'>删除</button>' in body}")
     st, body = http(f"{base}/admin/mkdir", data={"k": admin, "cur": "", "dir": "归档 2026"})
     check("同名文件夹再建 → 拒绝（不覆盖）", "已经有了" in body, body[:80])
     for bad in ("../逃逸", "/etc/绝对路径", ".隐藏", "a/b/c/d/e/f/g", "怪<名>"):
@@ -1040,6 +1040,34 @@ async def part_folders(site: str, state: Path, lib: Path, zhang: dict):
     check("目标里已有同名 → 自动加 (2)，两边都还在",
           (docs / "归档 2026" / "同名.md").read_text(encoding="utf-8").startswith("# 已有的那份")
           and (docs / "归档 2026" / "同名 (2).md").is_file(), body[:80])
+
+    # ---- 一行一次搞定：等级 + 文件夹一起存（@apply）----
+    for _old in list((docs / "归档 2026").glob("一起存*.md")) + list((docs / "技术").glob("一起存*.md")):
+        _old.unlink()                                          # 上一轮跑剩的先清掉（测试库会复用）
+    (docs / "技术" / "一起存.md").write_text("# 一起存\n\n等级和文件夹一次改完。\n", encoding="utf-8")
+    did_ap = KB.doc_id("原始文档/技术/一起存.md")
+    KB.upsert_doc(state, "kb1", rel="原始文档/技术/一起存.md", title="一起存", level="L1-商务",
+                  status="pending")
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "one": did_ap + "@apply",
+                                                "level_" + did_ap: "L2-技术",
+                                                "dest_" + did_ap: "归档 2026"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    did_ap2 = KB.doc_id("原始文档/归档 2026/一起存.md")
+    rec_ap = (cat["docs"] or {}).get(did_ap2) or {}
+    check("「保存」= 等级 + 文件夹一次生效（文件挪了、等级也换了）",
+          (docs / "归档 2026" / "一起存.md").is_file() and rec_ap.get("level") == "L2-技术",
+          f"path={rec_ap.get('path')} level={rec_ap.get('level')} 回执="
+          + (body[body.find('class="ok"'):body.find('class="ok"') + 120] if 'class="ok"' in body
+             else body[body.find('class="warn"'):body.find('class="warn"') + 160]))
+    check("一次生效只留一条台账（旧 id 不残留）", did_ap not in (cat["docs"] or {}))
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "one": did_ap2 + "@apply",
+                                                "level_" + did_ap2: "L9-不存在",
+                                                "dest_" + did_ap2: ""})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("「保存」带非法等级 → 整条拒绝，文件也不动",
+          "不在本窗允许清单" in body
+          and (docs / "归档 2026" / "一起存.md").is_file()
+          and ((cat["docs"].get(did_ap2) or {}).get("level")) == "L2-技术", body[:90])
 
     # ---- 文件夹默认等级：新文件继承 ----
     st, body = http(f"{base}/admin/flevel", data={"k": admin, "folder": "归档 2026",
@@ -1204,7 +1232,7 @@ async def part_users(site: str, state: Path, zhang: dict):
     did_tech = KB.doc_id("原始文档/技术/服务器技术方案.md")        # L2-技术
     did_core = KB.doc_id("原始文档/核心/核心网架构.md")            # L3-核心
 
-    st, body = http(f"{base}/admin?k={admin}")
+    st, body = http(f"{base}/admin/people?k={admin}")
     check("同事区一行就能改（有勾选框、有效期、保存按钮）",
           st == 200 and 'name="levels"' in body and "能看哪些等级（可多选）" in body
           and "更换地址" in body and "看地址" in body)
@@ -1334,16 +1362,17 @@ async def part_users(site: str, state: Path, zhang: dict):
           "--blue: var(--brand)" in THEME.theme_css("indigo"))
     check("主题：间距/圆角/字号刻度都在",
           all(v in THEME.theme_css("indigo") for v in ("--s3:", "--r3:", "--f3:", "--sh1:")))
-    st, body = http(f"{base}/admin?k={admin}")
+    st, body = http(f"{base}/admin/people?k={admin}")
     check("页面用的是令牌（var(--brand)/var(--accent)），不再是写死的蓝色",
           st == 200 and "var(--brand)" in body and "var(--accent)" in body and "#0a6cff" not in body)
     rest = body[body.find("</style>"):]
     check("样式块以外不出现硬编码颜色（新页面别破坏这条）",
           re.search(r"#[0-9a-fA-F]{6}", rest) is None)
-    check("空状态有说明（不是光一行灰字）", st == 200 and 'class="empty"' in body)
+    check("空状态有说明（不是光一行灰字）",
+          st == 200 and ("没有待批申请" in body and "手机上也能批" in body))
 
     # ⑪ 界面：折叠 + 悬停提示 + 分页
-    st, body = http(f"{base}/admin?k={admin}")
+    st, body = http(f"{base}/admin/people?k={admin}")
     check("同事是一行折叠卡（默认收起：点「编辑」才展开表单）",
           st == 200 and '<details class="ucard">' in body and 'class="caret"' in body
           and 'form class="box"' in body, f"HTTP {st}")
@@ -1362,8 +1391,8 @@ async def part_users(site: str, state: Path, zhang: dict):
         ACC.upsert_user(state, "kb1", f"分页测试{i}", ["L1-商务"], note="分页自检")
     total_users = len(ACC.list_users(state, "kb1"))
     n_pages = max(1, (total_users + 7) // 8)
-    st1, b1 = http(f"{base}/admin?k={admin}&pg=1")
-    st2, b2 = http(f"{base}/admin?k={admin}&pg=2")
+    st1, b1 = http(f"{base}/admin/people?k={admin}&pg=1")
+    st2, b2 = http(f"{base}/admin/people?k={admin}&pg=2")
     n1 = len(re.findall(r'<span class="name">', b1))
     n2 = len(re.findall(r'<span class="name">', b2))
     check("同事列表分页：第 1 页最多 8 位，并写着第 1/N 页",
@@ -1373,10 +1402,10 @@ async def part_users(site: str, state: Path, zhang: dict):
           f"HTTP {st2} 本页 {n2} 位 / 共 {total_users}")
     check("分页链接带着管理令（翻页不会掉权限）", "pg=2" in b1 and "k=" in b1)
 
-    st, body = http(f"{base}/admin?k={admin}&pg=abc")          # 页码被乱改也不崩
+    st, body = http(f"{base}/admin/people?k={admin}&pg=abc")          # 页码被乱改也不崩
     check("页码填垃圾值 → 回到第 1 页，不报错",
           st == 200 and f"第 1/{n_pages} 页" in body, f"HTTP {st}")
-    st, body = http(f"{base}/admin?k={admin}&pg=999")          # 页码越界 → 夹到最后一页
+    st, body = http(f"{base}/admin/people?k={admin}&pg=999")          # 页码越界 → 夹到最后一页
     check("页码越界 → 夹到最后一页，不报错",
           st == 200 and f"第 {n_pages}/{n_pages} 页" in body, f"HTTP {st}")
 
@@ -1454,7 +1483,7 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     check("过期 cookie → 失效", st == 401, f"HTTP {st}")
 
     # ---- 登录后：管理页用会话即可（不必带管理令）----
-    st, body = http(f"{base}/admin")
+    st, body = http(f"{base}/admin/people")
     check("管理员登录后 → 管理页直接可开（不用管理令）",
           st == 200 and "已授权的同事" in body, f"HTTP {st}")
 
@@ -1466,7 +1495,7 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = login(site + "/w-kb1-test", "logintester", pw2)
     check("同事也能登录（他自己的账号）→ 302 送到资料页",
           st == 302 and body.endswith("/files"), f"HTTP {st} loc={body[:60]}")
-    st, body = http(f"{base}/admin")
+    st, body = http(f"{base}/admin/people")
     check("同事登录后进不了管理页（说清是谁登录着 + 给出换成管理员的路）",
           st == 403 and "用户" in body and "/logout?next=" in body, f"HTTP {st}")
     st, body = http(f"{base}/files")
@@ -1517,7 +1546,7 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     # ---- 管理令仍兼容（老链接、脚本、cron）----
     import kb_web as WEB
     adm = WEB.ensure_admin_token(state)
-    st, body = http(f"{base}/admin?k={adm}", cookie="")
+    st, body = http(f"{base}/admin/people?k={adm}", cookie="")
     check("带上管理令 → 不登录也能进（兼容老链接/脚本）",
           st == 200 and "已授权的同事" in body, f"HTTP {st}")
 
@@ -1559,8 +1588,36 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
     # ---- 管理员生成邀请码（带等级、指定给人、有效期）----
     st, body = http(f"{base}/admin", cookie="")
     check("管理页有邀请码区块（无管理令也能看到登录要求）", st == 401 or "邀请码" in body, f"HTTP {st}")
-    st, body = http(f"{base}/admin?k={admin}")
-    check("管理页里有「邀请码」一节 + 生成表单",
+    # ---- 管理页拆分：一页一件事（资料 / 人员 / 邀请码），POST 完回到自己那一页 ----
+    st_d, b_d = http(f"{base}/admin?k={admin}")
+    st_p, b_p = http(f"{base}/admin/people?k={admin}")
+    st_i, b_i = http(f"{base}/admin/invites?k={admin}")
+    check("三个页签都能开（资料 / 人员 / 邀请码）",
+          st_d == 200 and st_p == 200 and st_i == 200, f"{st_d}/{st_p}/{st_i}")
+    check("资料页有页签条，且当前页签高亮",
+          'nav class="tabs"' in b_d and 'class="on" href' in b_d, b_d[:60])
+    check("资料页只有资料（上传 + 文件夹 + 清单），没有同事表和邀请码表单",
+          "添加资料" in b_d and "邀请码（同事凭它自助注册）" not in b_d
+          and 'name="max_uses"' not in b_d and "已授权的同事" not in b_d)
+    check("人员页只有人（待批 + 同事），没有资料清单/上传区",
+          "已授权的同事" in b_p and "添加资料" not in b_p and "资料清单" not in b_p)
+    check("邀请码页只有邀请码",
+          "邀请码（同事凭它自助注册）" in b_i and "已授权的同事" not in b_i
+          and "添加资料" not in b_i)
+    st_p2, b_p2 = http(f"{base}/admin/grant", data={"k": admin, "person": "页签自检员",
+                                                   "levels": "L1-商务", "for_days": "30"})
+    check("在人员页发地址 → 回执还落在人员页（页签不跳走）",
+          st_p2 == 200 and "页签自检员" in b_p2
+          and 'class="on" href="' in b_p2 and "/admin/people?k=" in b_p2, b_p2[:60])
+    st_i2, b_i2 = http(f"{base}/admin/invite", data={"k": admin, "levels": "L1-商务", "days": "30",
+                                                     "person": "页签自检员", "max_uses": "1",
+                                                     "action": "create"})
+    check("在邀请码页生成码 → 回执还落在邀请码页",
+          st_i2 == 200 and "邀请码" in b_i2
+          and 'class="on" href="' in b_i2 and "/admin/invites?k=" in b_i2, b_i2[:60])
+
+    st, body = http(f"{base}/admin/invites?k={admin}")
+    check("邀请码页有「邀请码」一节 + 生成表单",
           st == 200 and "邀请码（同事凭它自助注册）" in body and 'name="max_uses"' in body, f"HTTP {st}")
     st, body = http(f"{base}/admin/invite", data={"k": admin, "levels": "L2-技术", "days": "30",
                                                   "person": "注册测试员", "max_uses": "1",

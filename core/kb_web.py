@@ -135,7 +135,7 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   nav a {{ color: var(--ink); text-decoration: none; background: var(--card); border: 1px solid var(--line);
           padding: 5px var(--s3); border-radius: var(--r4); }}
   nav a:hover {{ border-color: var(--accent); color: var(--accent); }}
-  .card, form {{ background: var(--card); border: 1px solid var(--line); border-radius: var(--r3);
+  .card, form {{ background: var(--card); border: 0; border-radius: var(--r3);
           padding: var(--s4); margin: 0 0 var(--s4); box-shadow: var(--sh1); }}
   form.inline {{ display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s3); }}
   form.inline label {{ margin: 0; }}
@@ -196,7 +196,7 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   .hint {{ color: var(--dim); font-size: var(--f2); }}
   .muted {{ color: var(--dim); }}
   .big {{ font-size: 18px; font-weight: 700; letter-spacing: .5px; }}
-  .empty {{ border: 1px dashed var(--line2); border-radius: var(--r3); padding: var(--s5);
+  .empty {{ border: 0; border-radius: var(--r3); padding: var(--s5); background: var(--code-bg);
         text-align: center; color: var(--dim); background: var(--card); }}
   .drop {{ border: 2px dashed var(--line2); border-radius: var(--r3); padding: var(--s5);
         text-align: center; color: var(--dim); background: var(--card); }}
@@ -205,8 +205,10 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
           cursor: pointer; color: var(--ink); font-weight: 500; }}
   .btnlabel:hover {{ background: var(--btn2h); }}
   .sr {{ position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; z-index: -1; }}
-  .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s2); }}
-  .bar {{ display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; background: var(--card);
+  .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s2);
+            max-width: 760px; }}
+  td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  .bar {{ display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; background: var(--code-bg);
         border: 1px solid var(--line); border-radius: var(--r2); padding: 13px 15px; margin: var(--s4) 0 0; }}
   /* 条里的下拉框别拉满整行（拉满会把按钮挤到下一行、还显得头重脚轻） */
   .bar select {{ width: auto; min-width: 150px; max-width: 280px; }}
@@ -223,6 +225,20 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   .perm {{ min-width: 380px; }}
   form .bar {{ margin-top: var(--s4); }}
   .wrap + .bar {{ margin-top: var(--s4); }}
+  nav.tabs {{ display: flex; flex-wrap: wrap; gap: var(--s2); margin: var(--s4) 0 var(--s5); }}
+  nav.tabs a {{ padding: 8px 14px; border: 1px solid var(--line); border-radius: var(--r3);
+                text-decoration: none; color: var(--fg); background: var(--card); font-size: 14px; }}
+  nav.tabs a:hover {{ border-color: var(--accent); color: var(--accent); }}
+  nav.tabs a.on {{ background: var(--accent); border-color: var(--accent); color: #fff; }}
+  details.adv {{ border: 0; border-radius: var(--r3); padding: 0 var(--s4);
+                 margin-top: var(--s3); background: var(--code-bg); }}
+  details.adv > summary {{ cursor: pointer; padding: var(--s3) 0; font-size: 14px;
+                           color: var(--muted); display: flex; gap: var(--s3); align-items: center;
+                           flex-wrap: wrap; }}
+  details.adv > summary::marker {{ color: var(--accent); }}
+  details.adv[open] > summary {{ margin-bottom: var(--s3); }}
+  details.inline-adv {{ display: inline-block; padding: 0 var(--s3); vertical-align: middle; }}
+  details.inline-adv > summary {{ padding: 6px 0; }}
   td .bar .hint {{ margin-left: 2px; }}
   /* 小字提示改成“鼠标移上去才出现”的气泡 */
   .q {{ display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
@@ -279,7 +295,14 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
         background: #fff; color: var(--ink); text-decoration: none; }}
   .pager span.cur {{ background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 600; }}
   .pager a.off {{ opacity: .4; pointer-events: none; }}
-  @media (max-width: 720px) {{ details.ucard .two {{ grid-template-columns: 1fr; }} }}
+  @media (max-width: 720px) {{
+    details.ucard .two {{ grid-template-columns: 1fr; }}
+    /* 窄屏：表格自己横向滚，不许把整页撑宽（否则手机上整页左右晃） */
+    table {{ display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+    table td, table th {{ white-space: nowrap; }}
+    table td.docs, table td.fname {{ white-space: normal; }}
+    .ubody, .two > *, .bar > * {{ min-width: 0; }}
+  }}
   @media (max-width: 640px) {{ th, td {{ padding: 8px; }} th {{ position: static; }} .perm {{ min-width: 280px; }} }}
 </style></head><body>{nav}<h1>{esc(title)}</h1>{body}</body></html>""".encode()
 
@@ -317,12 +340,10 @@ def page_login(base: str, nxt: str, msg: str = "", user: str = "", mode: str = "
   <label>密码</label><input type="password" name="pw" required>
   <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:400">
     <input type="checkbox" name="remember" value="1" style="width:16px;height:16px"> 记住我（30 天）</label>
-  <button type="submit">登录管理页</button>
-  <span class="hint" style="margin-left:8px">连错 5 次会锁 10 分钟</span>
+  <button type="submit" title="密码连错 5 次会锁 10 分钟">登录管理页</button>
 </form>
-<p class="hint">忘记管理员密码？在这台机器上执行
-<code>bash lighthouse.sh kb passwd &lt;窗口&gt; --admin</code> 重设（旧的立刻作废）。</p>
-<p class="hint">你是来查资料的同事？<a class="minor" href="{esc(base)}/login">走普通登录</a>。</p>"""
+<p class="lead">忘记密码？<span class="q" title="在这台机器上执行：bash lighthouse.sh kb passwd &lt;窗口&gt; --admin（旧的立刻作废）">?</span>
+　·　你是来查资料的同事？<a href="{esc(base)}/login">走普通登录</a>。</p>"""
         return _page("管理员登录", body, base)
     body = f"""{msg}
 <p class="lead">这是一个内部资料库。请用**维护者给你的账号**登录；AI 助手那条线不受影响，
@@ -333,10 +354,10 @@ def page_login(base: str, nxt: str, msg: str = "", user: str = "", mode: str = "
   <label>密码</label><input type="password" name="pw" required>
   <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:400">
     <input type="checkbox" name="remember" value="1" style="width:16px;height:16px"> 记住我（30 天）</label>
-  <button type="submit">登录</button>
-  <span class="hint" style="margin-left:8px">连错 5 次会锁 10 分钟</span>
+  <button type="submit" title="密码连错 5 次会锁 10 分钟">登录</button>
 </form>
-<p class="hint">有邀请码？<a class="minor" href="{esc(base)}/register">在这里注册</a>（注册后会同时拿到地址和账号）。</p>
+<p class="lead">有邀请码？<a href="{esc(base)}/register">在这里注册</a>
+<span class="q" title="注册后会同时拿到一条专属地址和一个网页账号">?</span></p>
 <p class="hint">密码忘了？让维护者在这台机器上执行
 <code>bash lighthouse.sh kb passwd &lt;窗口&gt; --user 你的用户名</code> 重置（会生成新的临时密码）。</p>"""
     return _page("登录", body, base)
@@ -368,9 +389,9 @@ def page_register(base: str, levels: list[str], msg: str = "", code: str = "",
   </div>
   <label style="margin-top:10px">再输一次密码</label><input type="password" name="pw2" required>
   <button type="submit" style="margin-top:12px">注册并领取地址</button>
-  <span class="hint" style="margin-left:8px">已有账号？<a href="{esc(base)}/login">去登录</a></span>
+  <a style="margin-left:12px" href="{esc(base)}/login">已有账号，去登录</a>
 </form>
-<p class="hint">没收到邀请码就别试了 —— 码不对、过期、用过都不行。找维护者要一张。</p>"""
+<p class="lead" title="码不对、过期、用过都不行；找维护者要一张">邀请码找维护者要。</p>"""
     return _page("凭邀请码注册", body, base)
 
 
@@ -380,14 +401,14 @@ def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "", who:
 你会拿到一条**属于你自己的访问地址**，把它填进你的 AI 助手（如 ChatGPT 连接器）就能用。</p>
 {msg}
 <form method="post" action="{esc(base)}/request">
-  <label>姓名 <span class="hint">（必填）</span></label>
+  <label>姓名</label>
   <input name="name" maxlength="40" required>
   <label>部门 / 小组</label>
   <input name="dept" maxlength="40">
   <label>想看的等级</label>
   <select name="level_requested">{opts}</select>
-  <p class="hint">商务资料可自助开通；技术 / 核心资料需要维护者审批。</p>
-  <label>用途 <span class="hint">（必填，一两句就行）</span></label>
+  <p class="lead" title="商务资料自助开通；技术 / 核心资料需要维护者审批">选一档等级<span class="q">?</span></p>
+  <label>用途</label>
   <textarea name="purpose" maxlength="500" required></textarea>
   <label>联系方式</label>
   <input name="contact" maxlength="80" placeholder="手机 / 邮箱 / 微信，任选">
@@ -397,7 +418,7 @@ def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "", who:
 </form>
 <p class="hint" style="margin-top:16px">已经申请过？
 <a href="{esc(base)}/request/status">用「申请号 + 查询码」查进度 / 取地址</a>。</p>
-<p class="hint">看不到的资料就是没授权，需要更多请再提交一次申请并说明理由。</p>"""
+<p class="lead" title="看不到的资料就是没授权；需要更多请再提交一次申请并说明理由">看不到的 = 没授权。</p>"""
     return _page("申请访问招投标资料库", body, base, who=who)
 
 
@@ -413,7 +434,7 @@ def page_submitted(base: str, rec: dict, address: str = "") -> bytes:
   <li>名称：招投标资料库　服务器 URL：粘贴上面那条地址　身份验证：无 → 创建</li>
   <li>回到对话，输入框里打 <code>@招投标资料库</code> 选中它，然后提问</li>
 </ol>
-<p class="hint">不想用 AI 也行：在浏览器里打开 <code>&lt;你的地址&gt;/files</code>，勾选资料直接下载原件或打包带走。<br>
+<p class="lead" title="在浏览器里打开 &lt;你的地址&gt;/files，勾选资料直接下载原件或打包带走">不想用 AI 也行 → 用浏览器开「我的资料」。<br>
 其他客户端（WorkBuddy / Cherry Studio / Claude 等）：把同一条地址填进它的 MCP 配置即可。<br>
 这条地址是你专用的；只能读、不能改，请勿转发。默认 {ACC.DEFAULT_MINUTES // 1440} 天有效。</p>"""
     else:
@@ -512,7 +533,7 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
     boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(lv)}"><span>{esc(lv)}</span></label>'
                     for lv in levels)
     out = [f'''<h2>邀请码（同事凭它自助注册）</h2>
-<p class="hint">一码一人、可设有效期；同事拿注册链接自助领取地址和账号{_q("同事打开注册链接 → 填邀请码 + 姓名/部门/用途 + 自设用户名密码 → 当场拿到一条专属地址（填进他的 AI）和一个网页账号。谁发的码、发给了谁、谁在什么时间什么 IP 用的，都记在这张表里。")}</p>
+<p class="lead">一码一人、可设有效期<span class="q" title="同事打开注册链接 → 填邀请码 + 姓名/部门/用途 + 自设用户名密码 → 当场拿到一条专属地址（填进他的 AI）和一个网页账号。谁发的码、发给了谁、谁在什么时间什么 IP 用的，都记在这张表里。">?</span></p>
 <div class="bar" style="background:transparent;border:0;padding:0;margin:6px 0">
   <span class="chip c-approved">可用 {s["available"]}</span>
   <span class="chip c-pending">已用完 {s["used"]}</span>
@@ -536,7 +557,7 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
   </div>
   <div class="bar" style="background:transparent;border:0;padding:0;margin:12px 0 0">
     <button type="submit" name="action" value="create">生成邀请码</button>
-    <span class="hint">生成后把「注册链接」发给他，他填码就能自助拿到地址和账号</span>
+
   </div>
 </form>''']
     if not rows:
@@ -580,7 +601,7 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
     """已授权的同事：**默认只显示一行摘要，点「编辑」才展开**表单（等级/有效期/部门/停用/换址/删除/账号）。"""
     users = ACC.list_users(state_root, wid)
     if not users:
-        return '<p class="hint">还没有给任何人发过地址。下面可以直接发一条，或让同事去申请页自己申请。</p>'
+        return '<p class="empty" title="也可以让同事去申请页自己申请">还没有给任何人发过地址 —— 在「人员」页可以直接发一条。</p>'
     total = len(users)
     pages = max(1, (total + per - 1) // per)
     cur = min(max(1, int(page or 1)), pages)
@@ -721,20 +742,19 @@ def page_files(base: str, person: str, levels: list[str], docs: list[dict], toke
     inner = ("".join(blocks) if blocks else
              '<div class="warn">你的等级下暂时还没有可看的资料。需要更多请到申请页再申请。</div>')
     body = f"""{msg}
-<p class="lead">你是 <b>{esc(person)}</b>，等级：{esc("、".join(levels) or "无")}。下面是你能拿到的资料，
-按文件夹分组；每个文件夹都能整包下载，也可以勾选几篇一起打包。</p>
+<p class="lead">你是 <b>{esc(person)}</b>，等级：{esc("、".join(levels) or "无")}
+<span class="q" title="按文件夹分组；每个文件夹都能整包下载，也可以勾选几篇一起打包">?</span></p>
 <form method="post" action="{esc(base)}/zip">
   <input type="hidden" name="t" value="{esc(token)}">
   {inner}
-  <p class="hint">勾选几篇 → 一起打包成 zip 下载；也可以直接点每行的「原件 / 文本」，或点文件夹标题右边的整包下载。</p>
-  <button type="submit">打包下载勾选的资料</button>
+  <button type="submit" title="勾选几篇 → 一起打包成 zip；也可以直接点每行的「原件 / 文本」，或点文件夹标题右边的整包下载">打包下载勾选的资料</button>
 </form>
 {"".join(hidden_forms)}
 <h2>用 AI 也能拿文件</h2>
-<p class="hint">把你的地址（本页网址去掉 <code>/files</code>）填进 ChatGPT 等客户端的 MCP 配置，
+<p class="lead" title="把你的地址（本页网址去掉 /files）填进 ChatGPT 等客户端的 MCP 配置，
 然后直接说「把《XX》的原件给我」，AI 会返回一条<b>限时下载链接</b>（默认 15 分钟）。
 两种方式都只读、都记在访问日志里。</p>
-<p class="hint">只读；你的地址可以随时被收回或更换。资料涉及项目信息，请勿外传。</p>"""
+只读；你的地址可以随时被收回或更换。资料涉及项目信息，请勿外传。">两条路：AI 查 / 浏览器下载<span class="q">?</span></p>"""
     return _page("我的资料", body, base, who=who)
 
 
@@ -813,8 +833,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
                  + '" title="改完点右边的「改标题」—— 只改显示标题，磁盘文件名不动">'
                  '<br><span class=\"hint\">'
                  + esc(FOLD.dir_of(e.get("path") or "", docs_rel) or "根目录") + " · "
-                 + str(int(e.get("chars") or 0)) + " 字 · <code>"
-                 + esc(did) + "</code></span>")
+                 + str(int(e.get("chars") or 0)) + " 字</span>")
         note = e.get("note") or ""
         if note:
             title += '<br><span class="warn" style="padding:4px 8px;display:inline-block">' + esc(note) + "</span>"
@@ -823,18 +842,19 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         st = e.get("status")
         acts = ""
         if st == "approved":
-            acts = ('<button class="tiny ghost" name="one" value="' + esc(did) + '@setlevel">保存等级</button>'
-                    '<span class="sep" style="height:20px"></span>'
-                    '<button class="tiny ghost" name="one" value="' + esc(did) + '@revoke">下架</button>')
+            acts = ('<button class="tiny ghost" name="one" value="' + esc(did) + '@revoke">下架</button>')
         elif st == "unsupported":
             acts = ('<button class="tiny danger" name="one" value="' + esc(did) + '@forget">移除条目</button>')
         else:
             acts = ('<button class="tiny" name="one" value="' + esc(did) + '@approve">公开</button>')
-        acts += ('<span class="sep" style="height:20px"></span>'
+        # 每行只留主操作，零碎的塞进「⋯」—— 一行七个控件太吵，鼠标悬停能看到说明
+        acts += ('<details class="adv inline-adv rowmore"><summary title="改标题 / 进回收站">⋯</summary>'
+                 '<span class="actsrow">'
                  '<button class="tiny ghost" name="one" value="' + esc(did) + '@title">改标题</button>'
                  '<button class="tiny danger" name="one" value="' + esc(did) + '@trash"'
                  f' onclick="return confirm(&quot;把「{esc(e.get("title") or "")}」放进回收站？30 天内可以放回。&quot;)">'
-                 "进回收站</button>")
+                 "进回收站</button>"
+                 "</span></details>")
         title += "　" + prev
         here = FOLD.dir_of(e.get("path") or "", docs_rel)
         dest_opts = ('<option value="">（根目录）</option>'
@@ -848,7 +868,8 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
                     '<td><select name="level_' + esc(did) + '">' + opts(e.get("level") or levels[0], levels)
                     + "</select></td>"
                     '<td><select name="dest_' + esc(did) + '">' + dest_opts + "</select>"
-                    '<button class="tiny ghost" name="one" value="' + esc(did) + '@move">移动</button></td>'
+                    '<button class="tiny ghost" name="one" value="' + esc(did) + '@apply"'
+                    ' title="把这一篇的等级和文件夹一起存下来">保存</button></td>'
                     '<td class="acts"><span class="actsrow">' + acts + "</span></td></tr>")
     table = ("<table><tr><th style=\"width:28px\"><input type=\"checkbox\" id=\"all\"></th>"
              "<th>资料</th><th>状态</th><th>等级</th><th>文件夹</th><th>操作</th></tr>"
@@ -867,7 +888,6 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         info = f"{n_in} 篇" + (f" · {n_sub} 个子文件夹" if n_sub else "")
         enter = (esc(base) + "/admin?k=" + esc(admin) + "&dir=" + quote(full))
         own_lv = (folders_map.get(full) or {}).get("level") or ""
-        eff_lv = FOLD.level_for(folders_map, full, "")
         warn = f' onclick="return confirm(&quot;把「{esc(nm)}」整个放进回收站？30 天内可以放回。&quot;)"'
         frows.append(
             '<tr class="frow" data-drop="' + esc(full) + '">'
@@ -880,8 +900,9 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             '<option value="">（跟随父级/窗口默认）</option>'
             + "".join('<option value="' + esc(lv) + '"' + (" selected" if lv == own_lv else "") + ">"
                       + esc(lv) + "</option>" for lv in levels)
-            + '</select><button class="tiny ghost" type="submit">存默认等级</button>'
-            + (f'<span class="hint">现在生效：{esc(eff_lv)}</span>' if eff_lv else "")
+            + '</select><button class="tiny ghost" type="submit"'
+            ' title="把当前这一档存成该文件夹的默认等级 —— 只影响以后新进来的资料，已有资料不动">存</button>'
+
             + '</form></td>'
             '<td class="acts"><span class="actsrow">'
             '<a class="btnlabel" href="' + enter + '">进入</a>'
@@ -889,11 +910,11 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             '<input type="hidden" name="k" value="' + esc(admin) + '">'
             '<input type="hidden" name="cur" value="' + esc(dir_cur) + '">'
             '<input type="hidden" name="dir" value="' + esc(full) + '">'
-            '<button class="tiny danger" type="submit">删除（进回收站）</button></form>'
+            '<button class="tiny ghost" style="color:var(--danger)" type="submit" title="整棵进回收站，30 天内可以放回">删除</button></form>'
             + "</span></td></tr>")
     crumbs = " › ".join(
         ('<b>' + esc(nm) + "</b>") if pp == dir_cur else
-        ('<a href="' + esc(base) + "/admin?k=" + esc(admin) + (("&dir=" + quote(pp)) if pp else "")
+        ('<a class="crumb" href="' + esc(base) + "/admin?k=" + esc(admin) + (("&dir=" + quote(pp)) if pp else "")
          + '" data-drop="' + esc(pp) + '" title="也可以把文件拖到这里">' + esc(nm) + "</a>")
         for nm, pp in crumb)
     fsection = (
@@ -902,7 +923,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<input type="hidden" name="k" value="' + esc(admin) + '">'
         '<input type="hidden" name="cur" value="' + esc(dir_cur) + '">'
         '<input name="dir" maxlength="60" placeholder="新文件夹名字" required>'
-        '<button class="tiny ghost" type="submit">在当前文件夹里新建</button>'
+        '<button class="tiny ghost" type="submit" title="在当前所在的文件夹里新建一个文件夹">新建</button>'
         + _q("文件夹就是资料目录下的真实目录（上传整个文件夹时层级会自动建出来）。"
              "移动文件：按住资料行的 ⠿ 拖到文件夹上，或拖到面包屑的「全部资料」= 根目录；"
              "手机上用每行的「文件夹」下拉 + 「移动」。")
@@ -942,17 +963,20 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<form method="post" action="' + esc(base) + '/admin/upload?k=' + esc(admin)
         + '" enctype="multipart/form-data" id="upform">'
         '<input type="hidden" name="k" value="' + esc(admin) + '">'
-        '<h3 style="margin-top:0">添加资料（文件 / 整个文件夹 / 拖进来）</h3>'
+        '<h3 style="margin-top:0">添加资料</h3>'
         '<div class="drop" id="dz">把文件或<b>整个文件夹拖到这里</b><br>'
         '<label class="btnlabel" style="margin-top:8px">'
         '<input class="sr" type="file" name="files" multiple id="f1">选择文件</label>　'
         '<button class="btnlabel" type="button" id="pickdir">选择文件夹</button>'
         '<input class="sr" type="file" name="files" webkitdirectory id="f2">'
         '<div class="hint" id="uplist" style="margin-top:8px">还没选文件</div>'
-        '<div class="hint" style="margin-top:4px">把文件或文件夹拖进来' + _q(
+        '<div class="hint" style="margin-top:4px">' + _q(
         "拖文件夹进来最省事。万一「选择文件夹」没弹出系统窗口，就把文件夹拖进框里，"
         "或用 Finder 放进资料目录再点下面的「扫描资料目录」。上限：单文件 200MB、一次共 1GB、最多 2000 个文件。")
         + '</div></div>'
+        '<details class="adv"><summary title="放哪个文件夹 / 等级 / 上传后处理">更多设置'
+        + _q("默认放进你现在所在的文件夹（" + esc(dir_cur or "根目录") + "），等级跟着文件夹默认（"
+             + esc(_eff_cur or "窗口默认") + "）；不改就直接上传。") + '</summary>'
         '<div class="grid2" style="margin-top:12px">'
         '<div><label>放进哪个文件夹（当前位置：' + esc(dir_cur or "全部资料（根目录）") + '）</label>'
         '<select name="category"><option value="">（资料库根目录）</option>'
@@ -963,18 +987,25 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<div><label>这批资料的等级' + (f"（跟着「{esc(dir_cur)}」的默认等级）" if _eff_cur else "")
         + '</label><select name="level">' + lv_opts_cur + "</select></div>"
         "</div>"
+        '<div class="bar" style="margin-top:10px">'
+        '<button class="ghost" type="submit" name="after" value="publish"'
+        ' title="跳过待批，上传完同事立刻能看">上传并直接公开</button>'
+        + _q("只有你确认这批资料可以立刻给同事看时才用它；拿不准就用上面的「上传，先进待批」。")
+        + "</div></details>"
         '<div class="bar">'
         '<button type="submit" name="after" value="pending">上传，先进待批</button>'
-        '<button class="ghost" type="submit" name="after" value="publish">上传并直接公开</button>'
         + _q("上传后自动抽取文本（Word/PDF/PPT 等），原件保留、同事能直接下载。"
              "同名同内容的文件不会重复入库。")
+        + '<span class="sep"></span>'
+        '<button class="quiet" type="submit" form="scanform" formaction="' + esc(base) + '/admin/scan">'
+        '扫描资料目录</button>'
+        + _q("文件已经用 Finder 放进 " + str(root / docs_rel)
+             + " 时点这个；只认新增和内容有变化的，已定好的等级不会被改动。")
         + "</div></form>")
 
-    scanform = ('<form class="inline" method="post" action="' + esc(base) + '/admin/scan">'
+    scanform = ('<form class="inline" method="post" action="' + esc(base) + '/admin/scan" id="scanform">'
                 '<input type="hidden" name="k" value="' + esc(admin) + '">'
-                '<button class="ghost" type="submit">扫描资料目录</button>'
-                + _q("文件已经用 Finder 放进 " + str(root / docs_rel)
-             + " 时点这个；只认新增和内容有变化的，已定好的等级不会被改动。") + "</form>")
+                "</form>")
 
     failed = (f_cat or kw or f_st or f_lv)
     clear = ('<a class="hint" href="' + esc(base) + "/admin?k=" + esc(admin) + '">重置筛选</a>') if failed else ""
@@ -998,7 +1029,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<span class="hint" id="cnt">已选 0 篇</span>'
         '<label style="margin:0">批量定为</label><select name="bulk_level">' + lv_opts + "</select>"
         '<span class="sep"></span>'
-        '<button name="bulk" value="approve">设为公开</button>'
+        '<button class="ghost" name="bulk" value="approve">设为公开</button>'
         '<button class="ghost" name="bulk" value="setlevel">只改等级</button>'
         '<button class="ghost" name="bulk" value="revoke">下架</button>'
         '<label style="margin:0">移到</label><select name="dest_bulk">'
@@ -1008,7 +1039,10 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         '<button class="ghost" name="bulk" value="move">移动选中的</button>'
         '<button class="danger" name="bulk" value="trash"'
         ' onclick="return confirm(&quot;把选中的资料放进回收站？30 天内可以放回。&quot;)">放进回收站</button>'
-        '<button class="danger" style="margin-left:auto" name="bulk" value="forget">移除条目（不删文件）</button>'
+        '<details class="adv inline-adv"><summary>更多操作</summary>'
+        '<span class="actsrow">'
+        '<button class="danger" name="bulk" value="forget">移除条目（不删文件）</button>'
+        "</span></details>"
         + _q("先勾选左边小方框：「设为公开」= 按右边等级放开；「只改等级」= 已公开的换个等级；"
              "「下架」= 回到待批（资料还在）；「移动选中的」= 把勾选的资料挪到指定文件夹；"
              "「移除条目」= 不再管这篇（文件不动）。") + "</div>")
@@ -1131,7 +1165,9 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
               "    td.addEventListener('dragend',clear);\n"
               "  });\n"
               "  document.querySelectorAll('[data-drop]').forEach(function(t){\n"
-              "    t.addEventListener('dragover',function(e){ if(!did) return; e.preventDefault();"
+              "    t.addEventListener('dragover',function(e){ var has=did||"
+              "(e.dataTransfer&&(e.dataTransfer.types||[]).indexOf('text/plain')>=0);"
+              " if(!has) return; e.preventDefault();"
               " t.classList.add('dropok'); });\n"
               "    t.addEventListener('dragleave',function(){ t.classList.remove('dropok'); });\n"
               "    t.addEventListener('drop',function(e){\n"
@@ -1156,18 +1192,42 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
             + bulkbar
             + '<div class="wrap">' + table + "</div>"
             + '<div class="bar" style="margin-top:10px">'
-              '<span class="hint">单篇：先在「等级」列选好，再点「保存等级」或「公开」。</span>'
-              + _q("「看原件」= 你自己预览，不受等级限制，也不占同事的地址。") + '</div>'
+              + _q("单篇：在「等级」「文件夹」列选好，点「保存」；要放开就点「公开」。"
+                   "「看原件」= 你自己预览，不受等级限制，也不占同事的地址。") + "</div>"
             + "</form>"
-            + (f'<p class="hint">共 {len(docs)} 篇在台账里，筛选后 {len(shown)} 篇，本页显示 {len(page_items)} 篇。'
-               f'资料目录：<code>{esc(str(root / docs_rel))}</code></p>')
+
             + js + dragjs)
+
+
+# 每个入口/动作落在哪个页签上（POST 完要回到同一页，别跳来跳去）
+_SECTION_OF_SUB = {
+    "/admin": "docs", "/admin/people": "people", "/admin/invites": "invites",
+    "/admin/upload": "docs", "/admin/scan": "docs", "/admin/bulk": "docs", "/admin/doc": "docs",
+    "/admin/mkdir": "docs", "/admin/rmdir": "docs", "/admin/move": "docs", "/admin/flevel": "docs",
+    "/admin/title": "docs", "/admin/trash": "docs",
+    "/admin/decide": "people", "/admin/grant": "people", "/admin/revoke": "people",
+    "/admin/pass": "people", "/admin/user": "people", "/admin/rotate": "people",
+    "/admin/invite": "invites",
+}
+
+
+def _admin_tabs(base: str, admin: str, section: str, n_pen: int, n_users: int, n_codes: int) -> str:
+    """管理页顶部只放几个页签：一页一件事，别把什么都堆在一起。"""
+    items = [("docs", "/admin", "资料"),
+             ("people", "/admin/people", f"人员（待批 {n_pen} · 同事 {n_users}）"),
+             ("invites", "/admin/invites", f"邀请码（{n_codes}）"),
+             ("usage", "/admin/usage", "用量")]
+    out = []
+    for key, path, label in items:
+        cls = ' class="on"' if key == section else ""
+        out.append(f'<a{cls} href="{esc(base)}{path}?k={esc(admin)}">{esc(label)}</a>')
+    return '<nav class="tabs">' + "".join(out) + "</nav>"
 
 
 def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
                host: str, msg: str = "", remote: bool = False,
                root: Path | None = None, docs_rel: str = "", q: dict | None = None,
-               who: str = "") -> bytes:
+               who: str = "", section: str = "docs") -> bytes:
     q = q or {}                       # 上传后的回执页不带查询串，这里要兜住 None
     pub = f"https://{host}" if host else ""      # 给「复制」按钮用的完整地址前缀
     pend = KB.pending_requests(state_root, wid)
@@ -1202,20 +1262,12 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 
     docs_html = (_docs_panel(base, state_root, wid, admin, levels, root, docs_rel, q, page=_pnum("dp"))
                  if root is not None else '')
-    body = f"""{msg}
-<p class="lead">管理页 · {esc(_now())}　{'（可从公网访问：请勿把本页地址转发给别人）' if remote else '（仅部署机本机可访问）'}</p>
-
-{docs_html}
-
-<h2>待批申请（{len(pend)}）</h2>
-{ptable}
-
-<h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>
-{_users_table(state_root, wid, admin, base, levels, page=_pnum("pg"), pub=pub)}
-
-{_invites_section(base, state_root, wid, admin, levels, pub)}
-
-<h2>直接发一条地址（不经申请）</h2>
+    people_html = (
+        (('<h2>待批申请（' + str(len(pend)) + '）</h2>' + ptable) if pend else
+         '<p class="hint">没有待批申请（0 条）—— 同事提交 L2/L3 申请后会出现在这里，手机上也能批。</p>')
+        + f'<h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>'
+        + _users_table(state_root, wid, admin, base, levels, page=_pnum("pg"), pub=pub)
+        + f"""<h2>直接发一条地址（不经申请）</h2>
 <form method="post" action="{esc(base)}/admin/grant">
   <input type="hidden" name="k" value="{esc(admin)}">
   <div class="grid2">
@@ -1229,11 +1281,16 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
   <div style="margin-top:12px"><label>能看哪些等级（可多选）</label>
     <div class="lvpick">{all_levels_boxes}</div></div>
   <button type="submit">发放地址</button>
-</form>
-<p class="hint" style="margin-top:18px">用量看板：<a href="{esc(base)}/admin/usage?k={esc(admin)}">按人 / 按天 / 按资料</a>
-　·　命令行等价：<code>bash lighthouse.sh kb usage &lt;窗口&gt;</code></p>
-<p class="hint">地址段（token）在本机 <code>~/.lighthouse/state/kb-users.json</code>，也可用
-<code>bash lighthouse.sh kb users &lt;窗口&gt; --show-token</code> 查看。</p>"""
+</form>""")
+    invites_html = _invites_section(base, state_root, wid, admin, levels, pub)
+    section_html = {"docs": docs_html, "people": people_html, "invites": invites_html}.get(section, docs_html)
+    tabs = _admin_tabs(base, admin, section, len(pend), len(ACC.list_users(state_root, wid)),
+                       len(INV.list_codes(state_root, wid)))
+    body = f"""{msg}
+<p class="lead">{esc(_now())}<span class="q" title="{'公网可访问，请勿把本页地址转发给别人' if remote else '仅部署机本机可访问'}">?</span></p>
+{tabs}
+
+{section_html}"""
     return _page("资料库管理页", body, base, admin=admin, wide=True, who=who)
 
 
@@ -1244,9 +1301,11 @@ def page_usage(base: str, state_root: Path, wid: str, admin: str, by: str, days:
         rows = [r for r in rows if str(r.get("principal") or "") == person]
     summary = USAGE.summarize(rows, by)
     head = {"person": "同事", "day": "日期", "doc": "资料", "tool": "工具"}[by]
-    th = f'<tr><th>{esc(head)}</th><th>调用</th><th>成功</th><th>被拒</th><th>最后活跃</th><th>常读资料</th></tr>'
+    th = (f'<tr><th>{esc(head)}</th><th class="num">调用</th><th class="num">成功</th>'
+          f'<th class="num">被拒</th><th>最后活跃</th><th>常读资料</th></tr>')
     trs = "".join(
-        f'<tr><td>{esc(r["key"])}</td><td>{r["calls"]}</td><td>{r["ok"]}</td><td>{r["denied"]}</td>'
+        f'<tr><td>{esc(r["key"])}</td><td class="num">{r["calls"]}</td><td class="num">{r["ok"]}</td>'
+        f'<td class="num">{r["denied"]}</td>'
         f'<td>{esc(r["last_seen"])}</td><td>{esc(r["top_docs"] or r["top_tools"])}</td></tr>'
         for r in summary)
     links = " · ".join(f'<a href="{esc(base)}/admin/usage?k={esc(admin)}&by={b}">{n}</a>'
@@ -1407,7 +1466,8 @@ class _Portal:
 
     async def _need_login(self, send, sub: str, method: str):
         """没登录：页面请求就跳到登录页，接口请求回 401。"""
-        if method == "GET" and sub in ("/request", "/files", "/admin", "/admin/usage", "/"):
+        if method == "GET" and sub in ("/request", "/files", "/admin", "/admin/people", "/admin/invites",
+                                       "/admin/usage", "/"):
             nxt = self.base + sub
             door = "/admin/login" if sub.startswith("/admin") else "/login"
             word = "管理员登录" if sub.startswith("/admin") else "去登录"
@@ -1608,7 +1668,8 @@ class _Portal:
 
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
-        portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
+        portal_routes = {"/request", "/request/status", "/admin", "/admin/people", "/admin/invites",
+                         "/admin/usage", "/files", "/zip",
                          "/login", "/logout", "/register", "/admin/login",
                          "/admin/mkdir", "/admin/rmdir", "/admin/move",
                          "/admin/flevel", "/admin/trash",
@@ -2134,7 +2195,7 @@ class _Portal:
                   + str(res["skipped"]) + " 篇</p>"))
         return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
                                                  self.levels, self.host, msg, remote=self.remote,
-                                                 root=self.win.root, docs_rel=docs_rel,
+                                                 root=self.win.root, docs_rel=docs_rel, section="docs",
                                                  who=self._who_label()))
 
     # ---- 批量/单篇的权限调整（一个表单里同时支持勾选批量与单篇按钮）----
@@ -2242,12 +2303,33 @@ class _Portal:
         lv = {k[len("level_"):]: v for k, v in form.items() if k.startswith("level_")}
         target_level = (lv.get(dids[0]) if len(dids) == 1 and dids[0] in lv else form.get("bulk_level") or "")
         target_level = str(target_level or "").strip()
+        dest_row = {k[len("dest_"):]: v for k, v in form.items() if k.startswith("dest_")}
+        target_dest = str((dest_row.get(dids[0]) if len(dids) == 1 else None)
+                          or form.get("dest_bulk") or form.get("dest") or "").strip().strip("/")
         if not dids:
             return '<div class="warn">没有选中任何资料。</div>'
-        if action not in ("approve", "setlevel", "revoke", "forget", "reject", "move", "trash", "title"):
+        if action not in ("approve", "setlevel", "revoke", "forget", "reject", "move", "trash", "title",
+                          "apply"):
             return '<div class="warn">不认识的操作。</div>'
+        if action == "apply":                                     # 一行一次搞定：等级 + 文件夹
+            if target_level not in self.levels:
+                return '<div class="warn">等级不在本窗允许清单里。</div>'
+            # 直接做，不递归回 _bulk —— 表单里那个 one=<id>@apply 会被再读一遍，套成死循环
+            rec = KB.set_status(self.state_root, self.win.id, dids[0], "approved",
+                                level=target_level, by="维护者")
+            if not rec:
+                return '<div class="warn">台账里没有这一篇。</div>'
+            self.audit("kb_setlevel", {"doc_id": dids[0], "level": target_level}, True,
+                       {"actor": "admin", "ip": ip, "title": rec.get("title")})
+            out = ['<div class="ok">✅ ' + esc(rec.get("title") or dids[0]) + " 的等级已改成 "
+                   + esc(target_level) + "（有这条等级地址的同事立即生效）</div>"]
+            here = FOLD.dir_of(rec.get("path") or "",
+                               (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档")
+            if target_dest != here:
+                out.append(self._move_many(dids, target_dest, ip))
+            return "".join(out)
         if action == "move":
-            return self._move_many(dids, str(form.get("dest_bulk") or form.get("dest") or ""), ip)
+            return self._move_many(dids, target_dest, ip)
         if action == "trash":
             return self._trash_many(dids, ip)
         if action == "title":
@@ -2324,11 +2406,12 @@ class _Portal:
                 by = "person"
             return await self._send(send, page_usage(self.base, self.state_root, self.win.id, admin, by, days,
                                                      (qs.get("person") or [""])[0]))
-        if sub == "/admin" and method == "GET":
+        if sub in ("/admin", "/admin/people", "/admin/invites") and method == "GET":
             return await self._send(send, page_admin(
                 self.base, self.state_root, self.win.id, admin, self.levels, self.host,
                 remote=self.remote, root=self.win.root, q=qs, who=self._who_label(),
-                docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"))
+                docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档",
+                section=_SECTION_OF_SUB.get(sub, "docs")))
         if method != "POST":
             return await self._send(send, _page("没有这个页面", '<p class="lead">没有这个页面。</p>', self.base), 404)
 
@@ -2704,6 +2787,7 @@ class _Portal:
         return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
                                                  self.levels, self.host, msg, remote=self.remote,
                                                  root=self.win.root, q=qs,
+                                                 section=_SECTION_OF_SUB.get(sub, "docs"),
                                                  docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"))
 
 
