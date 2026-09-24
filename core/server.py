@@ -399,12 +399,24 @@ def _live_cfg() -> dict:
 
 
 def _audit(tool: str, args: dict, ok: bool, extra: dict | None = None) -> None:
+    """写审计。门户路径（链接里带 ?t=地址段 / 签名链接）不经过 MCP 认证，
+    那些请求的「谁」是从链接里认出来的，要把 person/levels 提升到顶层字段 ——
+    否则「谁下载了哪个文件」在报表里会变成一串 '-'（实测踩过）。"""
     try:
+        extra = dict(extra or {})
+        principal = PRINCIPAL.get()
+        levels = LEVELS.get()
+        if principal in ("", "-", None) and extra.get("person"):
+            principal = str(extra.pop("person"))
+        elif extra.get("person"):
+            extra.pop("person")
+        if extra.get("levels"):          # 门户请求里带的等级是「发生当时」的记录，以它为准
+            levels = list(extra.pop("levels"))
         line = {
             "ts": datetime.now(CST).isoformat(timespec="seconds"),
             "window": WIN.id,
-            "principal": PRINCIPAL.get(),
-            "levels": LEVELS.get(),
+            "principal": principal,
+            "levels": levels,
             "tool": tool,
             "args": {k: (v if not isinstance(v, str) or len(v) < 120 else v[:120] + "…") for k, v in (args or {}).items()},
             "ok": ok,
@@ -875,10 +887,14 @@ class _KbAuth:
             token = qs["token"][0].strip()
         else:
             path = scope.get("path", "")
-            m = re.match(r"^/kb-([A-Za-z0-9_\-]{16,})/?$", path)
+            # 地址段的两种写法都认（后面都可以跟子路径，如 /files 下载页）：
+            #   短地址  /kb-<地址段>[/files]            ← 要隧道里配 /kb-* 规则
+            #   长地址  <窗口路径>/kb-<地址段>[/files]   ← 永远可用，不依赖隧道规则
+            m = (re.match(r"^/kb-([A-Za-z0-9_\-]{16,})(/.*)?$", path) or
+                 re.match(r"^" + re.escape(self.real_path) + r"/kb-([A-Za-z0-9_\-]{16,})(/.*)?$", path))
             if m:
                 token = m.group(1)
-                scope = {**scope, "path": self.real_path}
+                scope = {**scope, "path": self.real_path + (m.group(2) or "")}
             elif path.rstrip("/") != self.real_path.rstrip("/"):
                 # 不是 MCP 端点本身（申请页 / 管理页 / 健康检查…）→ 交给网页层自己把关：
                 # 管理页有管理令 + 只允许部署机直连，申请页本来就该公开。
@@ -900,6 +916,10 @@ class _KbAuth:
             return
         PRINCIPAL.set(rec.get("person") or "-")
         LEVELS.set(list(rec.get("levels") or []))
+        # 网页层（kb_web）靠这个知道「现在是谁、能看哪几档」——地址段是唯一凭据
+        scope = {**scope, "kb_principal": {"person": rec.get("person"),
+                                            "levels": list(rec.get("levels") or []),
+                                            "token": token}}
         CLIENT_IP.set(_client_ip(scope, hdrs))
         UA.set(hdrs.get("user-agent", ""))
         KBACCESS.touch(self.state_root, self.wid, rec["person"])

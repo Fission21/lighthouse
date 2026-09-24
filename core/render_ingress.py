@@ -44,6 +44,22 @@ def build(cfg: dict, wins: dict) -> str:
             f"    service: http://127.0.0.1:{w['port']}",
             f"    # ↑ 窗口: {wid}（{w.get('title', wid)}）",
         ]
+    # 受控资料库的短地址：同事的地址形如 https://域名/kb-<口令>（不含窗口路径）。
+    # 只有在「只有一个资料库窗口」时才加这条 —— 一条 /kb-* 规则只能指向一个服务，
+    # 多个资料库窗口时短地址会串门，那种情况只保留长地址（<窗口路径>/kb-<口令>）。
+    kb_wins = {k: v for k, v in public.items() if ((v.get("kb") or {}).get("enabled") is True)}
+    if len(kb_wins) == 1:
+        wid, w = next(iter(kb_wins.items()))
+        lines += [
+            f"  - hostname: {cfg['hostname']}",
+            "    path: /kb-*",
+            f"    service: http://127.0.0.1:{w['port']}",
+            f"    # ↑ 受控资料库「{wid}」的短地址（同事的 /kb-<口令>）",
+        ]
+    elif len(kb_wins) > 1:
+        lines.append(f"  # 有多个资料库窗口（{', '.join(kb_wins)}）：短地址 /kb-* 会串门，"
+                     f"这些窗口只用长地址 <窗口路径>/kb-<口令>")
+
     if cfg.get("spare_hostname"):
         first = next(iter(public.items()), None)          # 备用入口同样只能指向 public 窗口
         if first:

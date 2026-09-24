@@ -76,6 +76,21 @@ def http(url: str, data: dict | None = None, headers: dict | None = None) -> tup
         return e.code, e.read().decode("utf-8", errors="replace")
 
 
+def http_bytes(url: str, data: dict | None = None, headers: dict | None = None) -> tuple[int, bytes, dict]:
+    """下载类请求：原样拿字节 + 响应头（zip、原件比对都要）"""
+    body = None
+    hdrs = dict(headers or {})
+    if data is not None:
+        body = "&".join(f"{k}={v}" for k, v in data.items()).encode()
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+    req = Request(url, data=body, headers=hdrs)
+    try:
+        with urlopen(req, timeout=20) as r:
+            return r.status, r.read(), dict(r.headers)
+    except HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
 async def with_session(url: str, fn):
     async with streamable_http_client(url) as (r, w):
         async with ClientSession(r, w) as session:
@@ -108,7 +123,9 @@ def build_env(tmp: Path):
         "kb": {"enabled": True, "docs_dir": "原始文档", "levels": LEVELS,
                "default_level": "L1-商务",
                "portal": {"enabled": True, "public_levels": LEVELS,
-                          "auto_approve_levels": ["L1-商务"], "admin_remote": False}},
+                          "auto_approve_levels": ["L1-商务"], "admin_remote": False},
+               "download": {"enabled": True, "original": True, "link_minutes": 15,
+                            "max_bundle_mb": 50}},
     }}}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     conf = tmp / "config.json"
@@ -447,10 +464,125 @@ def part_track(state: Path, env: dict, zhang: dict):
     check("kb admin-url 打印带管理令的管理页地址", rc == 0 and "/admin?k=" in out, out[:80])
 
 
+# ---------------------------------------------------------------- ⑥ 直接取文件（门户下载 + 限时链接）
+def part_download(site: str, state: Path, zhang: dict, lib_root: str):
+    print("\n⑥ 同事直接拿文件：门户下载页 / 单篇 / 打包 / 限时签名链接")
+    import io, time as _t, zipfile
+    import kb as KB
+    import kb_access as ACC
+    import kb_download as DL
+
+    did_tech = KB.doc_id("原始文档/技术/服务器技术方案.md")
+    did_core = KB.doc_id("原始文档/核心/核心网架构.md")
+    did_rep = next(e["id"] for e in KB.load_catalog(state, "kb1")[0]["docs"].values()
+                   if e["title"] == "报价单")
+    base = site + "/w-kb1-test"
+
+    li = ACC.get_user(state, "kb1", "李四")
+    _d, _e = ACC.load_all(state)
+    _d["kb1"]["李四"]["expires"] = None            # 前面测到期时改过，这里恢复
+    ACC.save_all(state, _d)
+    li_tok, zh_tok = li["token"], zhang["token"]
+
+    # 配置解析（写错类型 → 走默认，fail-closed 到安全侧）
+    check("download 配置：不写=默认开启、原件可下",
+          DL.download_cfg({})["enabled"] and DL.download_cfg({})["original"])
+    check("download 配置：写 false 才关",
+          DL.download_cfg({"kb": {"download": False}})["enabled"] is False)
+    check("download 配置：类型写错 → 用默认（不会变成开放）",
+          DL.download_cfg({"kb": {"download": {"enabled": "yes", "max_file_mb": "x"}}})["enabled"] is True)
+
+    # 没带地址 → 打不开
+    st, body = http(f"{base}/files")
+    check("没有地址打开 /files → 401 并提示怎么拿地址", st == 401 and "你的地址" in body, str(st))
+
+    # 用自己的地址打开 → 只列他有权看的
+    st, body = http(f"{site}/kb-{zh_tok}/files")
+    check("用地址段打开 /files → 列出他有权的资料", st == 200 and "服务器技术方案" in body, str(st))
+    check("清单里不出现没授权的那档（L3-核心）", "核心网架构" not in body)
+    check("清单里给出下载入口（原件/文本）", "mode=original" in body and "mode=text" in body)
+    check("清单里说明 AI 也能给下载链接", "限时下载链接" in body)
+    st, body2 = http(f"{base}/kb-{zh_tok}/files")
+    check("长地址（窗口路径 + /kb-<地址段>）同样能打开清单页",
+          st == 200 and "服务器技术方案" in body2, str(st))
+
+    # 等级不够 → 403
+    st, _ = http(f"{base}/dl/{did_core}?t={li_tok}")
+    check("等级不够下载 L3 → 403", st == 403, str(st))
+    st, _ = http(f"{base}/dl/{did_tech}?t={li_tok}")
+    check("等级不够下载 L2 → 403（李四只有商务档）", st == 403, str(st))
+
+    # 等级够 → 下到原件（字节与磁盘上的一致）
+    st, blob, hdrs = http_bytes(f"{base}/dl/{did_tech}?t={zh_tok}")
+    src = (Path(lib_root) / "原始文档/技术/服务器技术方案.md").read_bytes()
+    check("下载原件 → 200 且字节与磁盘上完全一致", st == 200 and blob == src, f"{st} 下载{len(blob)}B/原件{len(src)}B")
+    cd = hdrs.get("content-disposition", "")
+    check("Content-Disposition 同时给 ASCII 兜底与 UTF-8 原名",
+          "attachment" in cd and "filename*=UTF-8''" in cd, cd[:80])
+    st, blob, _ = http_bytes(f"{base}/dl/{did_tech}?t={zh_tok}&mode=text")
+    txt = blob.decode("utf-8", "replace")
+    check("下载抽取文本（mode=text）→ 是转出来的正文",
+          st == 200 and "双电源冗余" in txt and txt.lstrip().startswith("#"), str(st))
+    tfile = state / "kb/kb1" / ((KB.load_catalog(state, "kb1")[0]["docs"][did_tech]).get("text") or "")
+    check("mode=text 下的是抽取文本（与台账里登记的那份一致）", tfile.is_file() and blob == tfile.read_bytes(),
+          f"{len(blob)}B vs {tfile.stat().st_size if tfile.is_file() else -1}B")
+
+    # 拉黑文件即使被批准也下不到
+    st, _ = http(f"{base}/dl/{KB.doc_id('原始文档/.env')}?t={zh_tok}")
+    check("拉黑文件（.env）即便 approved 也下不到", st in (403, 404), str(st))
+
+    # 打包
+    st, b1, h1 = http_bytes(f"{base}/zip", data={"t": zh_tok, "ids": did_tech})
+    check("打包下载 → 200 且内容是 zip（看魔数 PK）",
+          st == 200 and b1[:2] == b"PK" and "zip" in h1.get("content-type", ""), f"{st} {b1[:2]!r}")
+    st, b2, _ = http_bytes(f"{base}/zip", data={"t": zh_tok, "ids": f"{did_tech}&ids={did_rep}"})
+    names = []
+    try:
+        names = zipfile.ZipFile(io.BytesIO(b2)).namelist()
+    except Exception as e:                                                   # noqa: BLE001
+        names = [f"打不开: {e.__class__.__name__}"]
+    check("打包多篇 → zip 里确实有两篇（勾选多值不被吞）", len(names) == 2, str(names)[:90])
+    st, body = http(f"{base}/zip", data={"t": li_tok, "ids": did_tech})
+    check("打包时越级的那篇被挡下（李四拿不到 L2）", st == 403 and "都没通过" in body, str(st))
+
+    # 审计：下载行必须认得出人（门户路径没带 MCP 口令，最容易漏）
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    dl = [x for x in rows
+          if x.get("tool") == "kb_download" and x.get("ok")
+          and (x.get("args") or {}).get("doc_id") == did_tech
+          and (x.get("args") or {}).get("mode") == "original"]
+    check("审计里「谁下载了哪一篇」写的是人名而不是 '-'",
+          bool(dl) and dl[-1].get("principal") == "张三", str(dl[-1])[:100] if dl else "没有下载记录")
+    check("下载审计带字节数（能证明确实取走了）", bool(dl) and (dl[-1].get("args") or {}).get("bytes", 0) > 0)
+    check("下载审计带他当时的等级", bool(dl) and dl[-1].get("levels") == ["L1-商务", "L2-技术"],
+          str(dl[-1].get("levels")) if dl else "")
+
+    # MCP：kb_link 给限时链接
+    async def link_test(session):
+        r = await call(session, "kb_link", {"doc_id": did_tech})
+        check("kb_link 返回限时链接", str(r.get("url", "")).startswith("http") and r.get("expires_in_minutes") == 15,
+              str(r)[:120])
+        url = r.get("url", "")
+        st, blob, _ = http_bytes(url)
+        check("AI 给的那条链接真的能下到文件",
+              st == 200 and "双电源冗余" in blob.decode("utf-8", "replace"), str(st))
+        bad = url.replace(did_tech, did_core)
+        st, _ = http(bad)
+        check("把链接里的编号换掉 → 403（签名绑定了这一篇）", st == 403, str(st))
+        # 过期：自己造一条过期的签名
+        old_sig = DL.sign(state, "kb1", did_tech, "张三", int(_t.time()) - 10)
+        from urllib.parse import quote as _q
+        st, _ = http(f"{base}/dl/{did_tech}?p={_q('张三')}&e={int(_t.time()) - 10}&s={old_sig}")
+        check("过期的签名链接 → 403/401", st in (401, 403), str(st))
+        r2 = await call(session, "kb_link", {"doc_id": did_core})
+        check("等级不够时 kb_link 也拒（不走后门）", "无权访问" in str(r2.get("error", "")), str(r2)[:80])
+    return link_test
+
+
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
-    env, base_url, state, _lib, port, _reg = build_env(tmp)
+    env, base_url, state, lib, port, _reg = build_env(tmp)
     print(f"受控资料库测试 | 隔离环境: {tmp}\n窗口: kb1（资料库模式，等级 {'/'.join(LEVELS)}）  服务: {base_url}\n")
 
     part_gate(tmp)
@@ -473,6 +605,9 @@ async def main() -> int:
         zhang = part_cli(env, state, cfg)
         await part_mcp(base_url, state, zhang)
         part_web(base_url, state)
+        site = base_url.replace("/w-kb1-test", "")
+        link_test = part_download(site, state, zhang, str(lib))
+        await with_session(f"{site}/kb-{zhang['token']}", link_test)
         part_track(state, env, zhang)
     finally:
         srv.terminate()

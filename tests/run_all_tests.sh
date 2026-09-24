@@ -96,7 +96,7 @@ run "只读审计(45项)"  "$PY" "$HERE/audit_readonly.py" "$URL" "$WROOT"
 run "写开关(25项)"    "$PY" "$HERE/test_write.py"    "$URL" "$WIN" "$WROOT"
 run "提权(56项)"      "$PY" "$HERE/test_elevate.py"
 run "加固(56项)"      "$PY" "$HERE/test_hardening.py"
-run "受控资料库(94项)" "$PY" "$HERE/test_kb.py"
+run "受控资料库(121项)" "$PY" "$HERE/test_kb.py"
 
 echo
 echo "════════ 结果：$pass 套通过 / $fail 套失败 ════════"

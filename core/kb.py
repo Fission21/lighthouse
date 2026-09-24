@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import kb_download as DL      # 下载层：门户下载页 + 限时签名链接
+
 import hashlib
 import json
 import re
@@ -281,6 +283,18 @@ def approved_entries(state_root: Path, wid: str, catalog: dict, root: Path, chec
 
 
 # ---------------------------------------------------------------- MCP 工具（只读四个）
+def _public_base_for(win) -> str:
+    """这个窗口对外的基地址：配了真域名就用域名，否则退回本机（测试/局域网也不会给出假 URL）。"""
+    try:
+        import config as C
+        host = str(C.load().get("hostname") or "").strip()
+        if host and "." in host and not host.startswith(("127.", "localhost", "0.0.0.0")):
+            return f"https://{host}{win.path}".rstrip("/")
+    except Exception:                                                        # noqa: BLE001
+        pass
+    return f"http://127.0.0.1:{win.port}{win.path}".rstrip("/")
+
+
 def register_tools(server, win, state_root: Path, audit, dump, redact,
                    levels_getter=lambda: None, principal_getter=lambda: "-") -> None:
     """把 kb_* 四个只读工具注册到 MCP server 上。
@@ -290,6 +304,9 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
     """
     def _cat():
         return load_catalog(state_root, win.id)
+
+    def _public_base() -> str:
+        return _public_base_for(win)
 
     def _levels():
         return levels_getter()
@@ -312,7 +329,8 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
         return dump({"window": win.id, "title": win.title, "mode": "controlled-library",
                      "you": {"name": principal_getter(), "levels": _levels()},
                      "visible_docs": len(docs), "categories": cats, "levels": lvls,
-                     "how_to_use": "先用 kb_search 定位关键词，再用 kb_read(doc_id, offset, limit) 读正文（分页）。只读，不能改。",
+                     "how_to_use": "先用 kb_search 定位关键词，再用 kb_read(doc_id, offset, limit) 读正文（分页）。"
+                                   "要让对方拿到原文件，用 kb_link(doc_id) 取一条限时下载链接（只读，不能改）。",
                      "note": "清单之外的内容不在你的授权范围内，也查不到编号。需要更多请联系资料维护者。"})
 
     @server.tool(description="列出你可访问的资料清单（可按分类/等级/标签/标题关键词过滤）。不含内部路径。")
@@ -322,8 +340,11 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
         if err:
             audit("kb_list", {}, False, {"reason": err})
             return dump({"window": win.id, "error": err})
-        docs = [entry_public_view(e) for e, _ in
-                approved_entries(state_root, win.id, cat, win.root, win.check, _levels())]
+        visible = approved_entries(state_root, win.id, cat, win.root, win.check, _levels())
+        docs = [entry_public_view(e) for e, _ in visible]
+        _dl = DL.download_cfg(win.cfg)
+        for d in docs:                      # 告诉 AI：这篇能不能直接给下载链接
+            d["download"] = bool(_dl["enabled"])
         q = (query or "").strip().lower()
         if q:
             docs = [d for d in docs if q in (d["title"] or "").lower()]
@@ -339,6 +360,36 @@ def register_tools(server, win, state_root: Path, audit, dump, redact,
               {"returned": len(page), "total": len(docs)})
         return dump({"window": win.id, "total": len(docs), "offset": off,
                      "next_offset": (off + lim if off + lim < len(docs) else None), "docs": page})
+
+    @server.tool(description="取一篇资料的**限时下载链接**（默认 15 分钟，只能下这一篇）。"
+                            "适合对方想要原文件时：把链接给出来即可，无需你的地址口令。")
+    def kb_link(doc_id: str, minutes: int = 0) -> str:
+        cat, err = _cat()
+        if err:
+            audit("kb_link", {"doc_id": doc_id}, False, {"reason": err})
+            return dump({"window": win.id, "error": err})
+        e, tp, err = resolve_doc(state_root, win.id, cat, doc_id, win.root, win.check, _levels())
+        if err:
+            audit("kb_link", {"doc_id": doc_id}, False, {"reason": err, "denied": True})
+            return dump({"window": win.id, "doc_id": doc_id, "error": err})
+        dcfg = DL.download_cfg(win.cfg)
+        if not dcfg["enabled"]:
+            audit("kb_link", {"doc_id": doc_id}, False, {"reason": "本资料库未开放下载"})
+            return dump({"window": win.id, "error": "本资料库未开放文件下载（只能在线阅读）"})
+        person = principal_getter() or "-"
+        if person in ("", "-"):
+            audit("kb_link", {"doc_id": doc_id}, False, {"reason": "无法确定身份"})
+            return dump({"window": win.id, "error": "需要以你自己的地址访问才能生成下载链接"})
+        m = DL.ttl_minutes(minutes, win.cfg)
+        q, exp = DL.make_link(state_root, win.id, (e or {}).get("id") or doc_id, person, m)
+        from urllib.parse import quote
+        base_url = _public_base()
+        url = f"{base_url}/dl/{(e or {}).get('id') or doc_id}?p={quote(person)}&{q}"
+        audit("kb_link", {"doc_id": doc_id, "minutes": m}, True, {"person": person})
+        return dump({"window": win.id, "doc_id": (e or {}).get("id") or doc_id,
+                     "title": (e or {}).get("title"), "level": (e or {}).get("level"),
+                     "url": url, "expires_in_minutes": m,
+                     "note": "这是限时链接（到期自动失效）；转发给谁都行，但只会失效不会延长。"})
 
     @server.tool(description="在你可访问的资料里检索关键词（多关键词=全部命中）。越权/未公开资料不会命中；片段自动脱敏。")
     def kb_search(keyword: str, limit: int = 20) -> str:

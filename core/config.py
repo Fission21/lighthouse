@@ -183,6 +183,15 @@ def _portal(cfg: dict) -> dict:
     return p if isinstance(p, dict) else {}
 
 
+def window_kb_download(cfg: dict) -> dict:
+    """下载设置（kb.download）：enabled / original / link_minutes / max_bundle_mb / max_file_mb。
+
+    没写 = 走 kb_download.DEFAULTS（允许下载原件）。写错类型 = 用默认值（fail-closed 到安全侧）。
+    """
+    import kb_download
+    return kb_download.download_cfg(cfg)
+
+
 def window_portal_enabled(cfg: dict) -> bool:
     """门户（申请页 + 管理页）是否开启。"""
     return window_kb_enabled(cfg) and _portal(cfg).get("enabled") is True

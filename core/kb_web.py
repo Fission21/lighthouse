@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlencode
 
 import kb as KB
 import kb_access as ACC
+import kb_download as DL
 import kb_usage as USAGE
 
 CST = timezone(timedelta(hours=8))
@@ -159,7 +160,8 @@ def page_submitted(base: str, rec: dict, address: str = "") -> bytes:
   <li>名称：招投标资料库　服务器 URL：粘贴上面那条地址　身份验证：无 → 创建</li>
   <li>回到对话，输入框里打 <code>@招投标资料库</code> 选中它，然后提问</li>
 </ol>
-<p class="hint">其他客户端（WorkBuddy / Cherry Studio / Claude 等）：把同一条地址填进它的 MCP 配置即可。<br>
+<p class="hint">不想用 AI 也行：在浏览器里打开 <code>&lt;你的地址&gt;/files</code>，勾选资料直接下载原件或打包带走。<br>
+其他客户端（WorkBuddy / Cherry Studio / Claude 等）：把同一条地址填进它的 MCP 配置即可。<br>
 这条地址是你专用的；只能读、不能改，请勿转发。默认 {ACC.DEFAULT_MINUTES // 1440} 天有效。</p>"""
     else:
         body = f"""<div class="warn"><b>已收到你的申请</b>（需要维护者审批）</div>
@@ -219,6 +221,40 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str) -> str:
         return '<p class="hint">还没有给任何人发过地址。</p>'
     return ('<table><tr><th>同事</th><th>等级</th><th>状态</th><th>使用</th><th>操作</th></tr>'
             + "".join(rows) + "</table>")
+
+
+def page_files(base: str, person: str, levels: list[str], docs: list[dict], token: str,
+               dcfg: dict, msg: str = "") -> bytes:
+    """同事的「我的资料」页：能用 AI 查，也能在这儿直接把文件拿走。"""
+    rows = []
+    for d in docs:
+        did = esc(d["doc_id"])
+        link = f"{esc(base)}/dl/{did}?t={esc(token)}"
+        orig = (f'<a href="{link}&mode=original">原件</a>'
+                if dcfg.get("original", True) else '<span class="hint">原件未开放</span>')
+        rows.append(
+            f'<tr><td><input type="checkbox" name="ids" value="{did}" style="width:auto"></td>'
+            f'<td>{esc(d.get("title") or "")}<div class="hint">{esc(d.get("category") or "未分类")}'
+            f' · {int(d.get("chars") or 0)} 字</div></td>'
+            f'<td>{esc(d.get("level") or "")}</td>'
+            f'<td>{orig} · <a href="{link}&mode=text">文本</a></td></tr>')
+    table = ("<table><tr><th style=\"width:28px\"></th><th>资料</th><th>等级</th><th>下载</th></tr>"
+             + "".join(rows) + "</table>") if rows else \
+            '<div class="warn">你的等级下暂时还没有可看的资料。需要更多请到申请页再申请。</div>'
+    body = f"""{msg}
+<p class="lead">你是 <b>{esc(person)}</b>，等级：{esc("、".join(levels) or "无")}。下面是你能拿到的资料。</p>
+<form method="post" action="{esc(base)}/zip">
+  <input type="hidden" name="t" value="{esc(token)}">
+  {table}
+  <p class="hint">勾选几篇 → 一起打包成 zip 下载；也可以直接点每行的「原件 / 文本」。</p>
+  <button type="submit">打包下载勾选的资料</button>
+</form>
+<h2>用 AI 也能拿文件</h2>
+<p class="hint">把你的地址（本页网址去掉 <code>/files</code>）填进 ChatGPT 等客户端的 MCP 配置，
+然后直接说「把《XX》的原件给我」，AI 会返回一条<b>限时下载链接</b>（默认 15 分钟）。
+两种方式都只读、都记在访问日志里。</p>
+<p class="hint">只读；你的地址可以随时被收回或更换。资料涉及项目信息，请勿外传。</p>"""
+    return _page("我的资料", body, base)
 
 
 def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
@@ -310,6 +346,9 @@ class _Portal:
         self.public_levels = _public_levels_from(cfg)
         self.auto_levels = _auto_levels_from(cfg)
         self.remote = _admin_remote_from(cfg)
+        self._ip = "-"          # 每个请求进来时更新，供审计用
+        self._multi: dict = {}  # 本次请求的表单多值字段
+        self._token = ""        # 本次请求里出现的地址段（下载页里的链接要用）
 
     # ---- 小工具 ----
     async def _send(self, send, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8"):
@@ -352,13 +391,14 @@ class _Portal:
         qs = parse_qs(scope.get("query_string", b"").decode(errors="replace"))
         sub = path[len(self.base):].rstrip("/") or "/"
         ip = client_ip(scope, hdrs)
+        self._ip = ip
         method = scope.get("method", "GET")
 
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
-        portal_routes = {"/request", "/request/status", "/admin", "/admin/usage",
+        portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate", "/healthz"}
-        if sub not in portal_routes:
+        if sub not in portal_routes and not sub.startswith("/dl/"):
             accept = hdrs.get("accept", "")
             if sub in ("", "/") and method == "GET" and "text/html" in accept and "text/event-stream" not in accept:
                 return await self._send(send, self._redirect(f"{self.base}/request"))
@@ -372,7 +412,9 @@ class _Portal:
                 msg = await receive()
                 body += msg.get("body", b"")
                 more = msg.get("more_body", False)
-            form = {k: v[0] for k, v in parse_qs(body.decode(errors="replace")).items()}
+            parsed = parse_qs(body.decode(errors="replace"))
+            self._multi = parsed                                       # 多选字段（ids）要保留全部
+            form = {k: v[0] for k, v in parsed.items()}
 
         try:
             if sub == "/request":
@@ -383,10 +425,170 @@ class _Portal:
                 return await self._status(send, qs)
             if sub == "/healthz":
                 return await self._send(send, b'{"ok":true}', ctype="application/json")
+            if sub == "/files" or sub.startswith("/dl/") or sub == "/zip":
+                return await self._download(scope, send, qs, form, sub)
             return await self._admin(scope, send, hdrs, qs, form, sub, ip, method)
         except Exception as e:                                              # noqa: BLE001
             self.audit("portal_error", {"path": path}, False, {"reason": f"{e.__class__.__name__}: {e}"})
             return await self._send(send, _page("出错了", f'<div class="warn">{esc(e)}</div>', self.base), 500)
+
+    # ---- 下载（同事取文件）----
+    def _who(self, scope, qs: dict, form: dict | None = None) -> tuple[str, list[str], str]:
+        """认出「现在是谁」：① 由地址段进来的（scope.kb_principal）② 链接里带 t=地址段 ③ 签名链接。"""
+        p = scope.get("kb_principal")
+        if isinstance(p, dict) and p.get("person"):
+            self._token = str(p.get("token") or "")
+            return p["person"], list(p.get("levels") or []), ""
+        tok = (qs.get("t") or [""])[0] or ((form or {}).get("t") or "")
+        if tok:
+            rec, err = ACC.check_token(self.state_root, self.win.id, tok)
+            if err or not rec:
+                return "", [], err or "地址无效"
+            self._token = tok
+            return rec.get("person") or "", list(rec.get("levels") or []), ""
+        return "", [], ""
+
+    @staticmethod
+    def _signed_parts(qs: dict) -> tuple[str, str, str]:
+        """签名链接的三个参数：p=人 &e=到期 &s=签名（给 AI 用来发的那种）。"""
+        return ((qs.get("p") or [""])[0], (qs.get("e") or [""])[0], (qs.get("s") or [""])[0])
+
+    def _pick(self, did: str, levels: list[str], mode: str):
+        """过篇级闸门 → 返回 (条目, 要下载的文件, 错误)。"""
+        cat, err = KB.load_catalog(self.state_root, self.win.id)
+        if err:
+            return None, None, err
+        e, tp, err = KB.resolve_doc(self.state_root, self.win.id, cat, did, self.win.root,
+                                    self.win.check, levels)
+        if err:
+            return None, None, err
+        dcfg = DL.download_cfg(self.cfg)
+        want_original = (mode != "text") and bool(dcfg.get("original", True))
+        f = (self.win.root / str((e or {}).get("path") or "")) if want_original else tp
+        if not f.is_file():
+            return None, None, "文件不在了（可能被移动或删除）"
+        mb = float(dcfg.get("max_file_mb", 50))
+        try:
+            if f.stat().st_size > mb * 1024 * 1024:
+                return None, None, f"文件超过单次下载上限 {mb:.0f}MB"
+        except OSError:
+            return None, None, "读不到文件"
+        return e, f, ""
+
+    async def _download(self, scope, send, qs: dict, form: dict, sub: str):
+        person, levels, err = self._who(scope, qs, form)
+        sp, sexp, ssig = self._signed_parts(qs)
+        signed = False
+        if not person and sp:
+            # 签名链接：先认人（等级按他的人查），**签名等知道是哪一篇之后再验**
+            person, signed = sp, True
+            rec = ACC.get_user(self.state_root, self.win.id, person) or {}
+            levels = list(rec.get("levels") or [])
+            if not DL.person_active(self.state_root, self.win.id, person):
+                person = ""
+                err = "这个人的地址已停用或到期"
+        if not person:
+            err = err or "需要你的地址或有效链接"
+            self.audit("kb_download", {"path": sub}, False, {"reason": err, "denied": True})
+            return await self._send(send, _page(
+                "打不开", f'<div class="warn">{esc(err)}</div>'
+                '<p class="hint">请用你自己的那条地址打开：<code>&lt;你的地址&gt;/files</code>。'
+                '地址丢了就去申请页重新申请。</p>', self.base), 401)
+
+        dcfg = DL.download_cfg(self.cfg)
+        if not dcfg.get("enabled"):
+            self.audit("kb_download", {"path": sub}, False, {"reason": "未开放下载", "person": person, "levels": levels})
+            return await self._send(send, _page("未开放下载", '<div class="warn">本资料库只开放在线阅读，'
+                                                              "不提供文件下载。</div>", self.base), 403)
+
+        # ① 清单页（必须用他自己的地址打开：签名只绑单篇，不能拿来列清单）
+        if sub == "/files":
+            if signed:
+                self.audit("kb_files", {}, False, {"reason": "签名链接不能打开清单页", "person": person, "levels": levels})
+                return await self._send(send, _page(
+                    "用你自己的地址打开",
+                    '<div class="warn">下载链接只能取那一篇文件；要列出全部资料，请用你<b>自己的地址</b>打开'
+                    " <code>&lt;你的地址&gt;/files</code>。</div>", self.base), 403)
+            cat, _ = KB.load_catalog(self.state_root, self.win.id)
+            docs = [KB.entry_public_view(e) for e, _ in
+                    KB.approved_entries(self.state_root, self.win.id, cat or {}, self.win.root,
+                                        self.win.check, levels)]
+            tok = (qs.get("t") or [""])[0] or self._token
+            self.audit("kb_files", {"count": len(docs)}, True, {"person": person, "levels": levels, "ip": self._ip})
+            return await self._send(send, page_files(self.base, person, levels, docs, tok, dcfg))
+
+        # ② 单篇下载
+        if sub.startswith("/dl/"):
+            did = sub[len("/dl/"):].strip("/")
+            if signed and not DL.verify(self.state_root, self.win.id, did, person, sexp, ssig):
+                self.audit("kb_download", {"doc_id": did}, False,
+                           {"reason": "签名无效或已过期", "person": person, "levels": levels, "denied": True, "ip": self._ip})
+                return await self._send(send, _page(
+                    "链接失效", '<div class="warn">这条下载链接无效或已过期（默认 15 分钟）。'
+                               '请让对方重新生成一条，或直接打开你自己的地址页下载。</div>', self.base), 403)
+            mode = ((qs.get("mode") or ["original"])[0] or "original").lower()
+            e, f, err = self._pick(did, levels, mode)
+            if err:
+                self.audit("kb_download", {"doc_id": did, "mode": mode}, False,
+                           {"reason": err, "person": person, "levels": levels, "denied": True, "ip": self._ip})
+                return await self._send(send, _page("下载被拒", f'<div class="warn">{esc(err)}</div>',
+                                                    self.base), 403)
+            try:
+                data = f.read_bytes()
+            except OSError:
+                return await self._send(send, _page("读不到文件", '<div class="warn">读不到文件。</div>',
+                                                    self.base), 500)
+            name = DL.safe_name(str((e or {}).get("title") or ""), f)
+            if f.suffix.lower() == ".md" and not name.lower().endswith((".md",)):
+                name += ".md"
+            self.audit("kb_download", {"doc_id": did, "mode": mode, "bytes": len(data)}, True,
+                       {"person": person, "levels": levels, "title": (e or {}).get("title"), "ip": self._ip})
+            await send({"type": "http.response.start", "status": 200, "headers": [
+                (b"content-type", DL.media_type(f).encode()),
+                (b"content-length", str(len(data)).encode()),
+                (b"content-disposition", DL.disposition(name).encode()),
+                (b"cache-control", b"no-store"),
+                (b"x-content-type-options", b"nosniff")]})
+            await send({"type": "http.response.body", "body": data})
+            return
+
+        # ③ 打包（同上：只认地址段）
+        if signed:
+            self.audit("kb_bundle", {}, False, {"reason": "签名链接不能打包", "person": person, "levels": levels})
+            return await self._send(send, _page("用你自己的地址下载",
+                                                '<div class="warn">打包下载请用你自己的地址页。</div>',
+                                                self.base), 403)
+        ids = list(dict.fromkeys((self._multi or {}).get("ids") or
+                                 [x for x in (form.get("ids") or "").split(",") if x]))
+        if not ids:
+            return await self._send(send, _page("没勾选", '<div class="warn">没有勾选任何资料。</div>',
+                                                self.base), 400)
+        items, bad = [], []
+        for did in ids[:50]:
+            e, f, err = self._pick(did, levels, "text" if not dcfg.get("original", True) else "original")
+            if err:
+                bad.append(f"{did}: {err}")
+                self.audit("kb_bundle", {"doc_id": did}, False,
+                           {"reason": err, "person": person, "levels": levels, "denied": True, "ip": self._ip})
+                continue
+            items.append((DL.safe_name(str((e or {}).get("title") or ""), f), f))
+        if not items:
+            return await self._send(send, _page("都没通过", '<div class="warn">勾选的资料都没通过检查：'
+                                                          f"{esc('; '.join(bad))}</div>", self.base), 403)
+        blob, err = DL.zip_bytes(items, int(dcfg.get("max_bundle_mb", 200)))
+        if err:
+            self.audit("kb_bundle", {"ids": ids}, False, {"reason": err, "person": person, "levels": levels})
+            return await self._send(send, _page("打包失败", f'<div class="warn">{esc(err)}</div>',
+                                                self.base), 400)
+        self.audit("kb_bundle", {"ids": ids, "bytes": len(blob), "skipped": len(bad)}, True,
+                   {"person": person, "levels": levels, "ip": self._ip})
+        name = f"资料打包-{time.strftime('%Y%m%d-%H%M')}.zip"
+        await send({"type": "http.response.start", "status": 200, "headers": [
+            (b"content-type", b"application/zip"),
+            (b"content-length", str(len(blob)).encode()),
+            (b"content-disposition", DL.disposition(name).encode()),
+            (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body", "body": blob})
 
     # ---- 申请 ----
     async def _submit(self, send, form: dict, ip: str):
@@ -481,7 +683,7 @@ class _Portal:
                     KB.set_request_status(self.state_root, self.win.id, rid, "approved",
                                           note=f"批准（{level}）")
                     self.audit("kb_decision", {"request": rid, "action": "approve", "level": level}, True,
-                               {"person": u["person"], "actor": "admin", "ip": ip})
+                               {"person": u["person"], "levels": [level], "actor": "admin", "ip": ip})
                     msg = (f'<div class="ok">✅ 已批准 <b>{esc(u["person"])}</b>（{esc(level)}，'
                            f'{esc(ACC.describe_expiry(u))}）<br>地址：<code>{esc(self._address(u["token"]))}</code>'
                            f'<br><span class="hint">这条地址可以直接发给他；他也能在查进度页自己看到。</span></div>')
@@ -501,7 +703,7 @@ class _Portal:
                 u = ACC.upsert_user(self.state_root, self.win.id, person, [level],
                                     dept=form.get("dept", ""), note=form.get("note", ""), minutes=minutes)
                 self.audit("kb_grant", {"person": person, "level": level}, True,
-                           {"actor": "admin", "ip": ip, "expires": u.get("expires")})
+                           {"person": person, "levels": [level], "actor": "admin", "ip": ip, "expires": u.get("expires")})
                 msg = (f'<div class="ok">✅ {esc(person)} 的地址已发放（{esc(level)}，{esc(ACC.describe_expiry(u))}）'
                        f'<br><code>{esc(self._address(u["token"]))}</code></div>')
         elif sub == "/admin/revoke":
