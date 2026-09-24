@@ -247,6 +247,15 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   .q:hover {{ border-color: var(--accent); color: var(--accent); }}
   /* ---- 文件夹区（面包屑 / 新建 / 列表 / 拖放）---- */
   .dirbar {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }}
+  /* 可点表头：平时就是普通表头，鼠标一过才显出是能点的 */
+  th a.thlink {{ color: inherit; text-decoration: none; border-bottom: 1px dashed transparent; white-space: nowrap; }}
+  th a.thlink:hover {{ border-bottom-color: currentColor; }}
+  th a.thlink.on {{ color: var(--fg); border-bottom-color: var(--accent); }}
+  input.ffilter {{ width: 104px; padding: 4px 8px; font-size: var(--f2); border-radius: var(--r2); }}
+  td.nowrap {{ white-space: nowrap; }}
+  td.ellip {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  table.rtable {{ width: 100%; table-layout: fixed; }}
+  table.rtable td {{ padding-top: 5px; padding-bottom: 5px; }}
   .dirbar .crumb {{ font-size: 14px; }}
   .dirbar .crumb a {{ color: var(--accent); text-decoration: none; }}
   .dirbar .crumb a:hover {{ text-decoration: underline; }}
@@ -776,6 +785,17 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
     f_st = (q.get("status") or [""])[0]
     f_cat = (q.get("cat") or [""])[0]
     f_lv = (q.get("level") or [""])[0]
+    sort = (q.get("sort") or [""])[0]
+    ord_rev = (q.get("ord") or ["asc"])[0] == "desc"
+
+    def qlink(path: str = "/admin", **extra) -> str:
+        """保持当前筛选/分页，只换某几个参数 —— 排序、翻页都用它，别把筛选丢掉。"""
+        from urllib.parse import urlencode
+        d = {k: v[0] for k, v in q.items()
+             if v and v[0] and k in ("q", "status", "cat", "level", "dir", "dp", "pg")}
+        d.update({k: v for k, v in extra.items() if v not in (None, "")})
+        d["k"] = admin
+        return esc(base) + path + "?" + urlencode(d)
 
     # ---- 文件夹（= 资料目录下的真实子目录）----
     all_dirs = FOLD.dirs_under(root, docs_rel)
@@ -810,6 +830,21 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         if dir_cur and FOLD.dir_of(e.get("path") or "", docs_rel) != dir_cur:
             continue
         shown.append((did, e))
+
+    if sort in ("title", "status", "level", "dir", "time"):
+        def _sk(t):
+            _did, e = t
+            if sort == "title":
+                return (e.get("title") or "").lower()
+            if sort == "status":
+                return str(e.get("status") or "")
+            if sort == "level":
+                lv = str(e.get("level") or "")
+                return levels.index(lv) if lv in levels else len(levels)
+            if sort == "dir":
+                return FOLD.dir_of(e.get("path") or "", docs_rel) or ""
+            return str(e.get("approved_at") or e.get("added_at") or "")
+        shown.sort(key=_sk, reverse=ord_rev)
 
     n_by = {}
     for e in docs.values():
@@ -871,8 +906,18 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
                     '<button class="tiny ghost" name="one" value="' + esc(did) + '@apply"'
                     ' title="把这一篇的等级和文件夹一起存下来">保存</button></td>'
                     '<td class="acts"><span class="actsrow">' + acts + "</span></td></tr>")
+    def thlink(key: str, label: str) -> str:
+        """可点的表头：点一下按它排，再点一下反过来。当前列带箭头。"""
+        on = sort == key
+        nxt = "desc" if (on and not ord_rev) else "asc"
+        arrow = ("▼" if ord_rev else "▲") if on else ""
+        return ('<th><a class="thlink' + (" on" if on else "") + '" href="'
+                + qlink(sort=key, ord=nxt) + '" title="按「' + esc(label) + '」排（再点一次反过来）">'
+                + esc(label) + (" " + arrow if arrow else "") + "</a></th>")
+
     table = ("<table><tr><th style=\"width:28px\"><input type=\"checkbox\" id=\"all\"></th>"
-             "<th>资料</th><th>状态</th><th>等级</th><th>文件夹</th><th>操作</th></tr>"
+             + thlink("title", "资料") + thlink("status", "状态") + thlink("level", "等级")
+             + thlink("dir", "文件夹") + "<th>操作</th></tr>"
              + "".join(rows) + "</table>"
              + _pager(base, admin, "dp", cur, pages, total_docs, "篇资料",
                       {k2: v2[0] for k2, v2 in q.items()
@@ -927,6 +972,8 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         + _q("文件夹就是资料目录下的真实目录（上传整个文件夹时层级会自动建出来）。"
              "移动文件：按住资料行的 ⠿ 拖到文件夹上，或拖到面包屑的「全部资料」= 根目录；"
              "手机上用每行的「文件夹」下拉 + 「移动」。")
+        + '<input id="ffilter" class="ffilter" placeholder="筛文件夹" autocomplete="off"'
+          ' title="按名字筛这一层的文件夹（只在浏览器里筛，不联网、不刷新）">'
         + "</form></div>"
         + ('<table class="ftable">' + "".join(frows) + "</table>" if frows else
            '<p class="hint">这一层还没有子文件夹。上传整个文件夹会自动建层级，也可以点右边「新建」。</p>'))
@@ -1182,6 +1229,46 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
               "  });\n"
               "})();\n</script>")
 
+    filtjs = ("<script>\n(function(){\n"
+              "  var i=document.getElementById('ffilter'); if(!i) return;\n"
+              "  i.addEventListener('input',function(){\n"
+              "    var v=i.value.trim().toLowerCase(), n=0;\n"
+              "    document.querySelectorAll('tr.frow').forEach(function(r){\n"
+              "      var el=r.querySelector('.fname b'); var nm=el?el.textContent.toLowerCase():'';\n"
+              "      var hit=!v||nm.indexOf(v)>=0; r.style.display=hit?'':'none'; if(hit) n++;\n"
+              "    });\n"
+              "    var t=document.getElementById('fcount'); if(t) t.textContent=v?('筛出 '+n+' 个'):'';\n"
+              "  });\n"
+              "})();\n</script>")
+
+    # 最近动态：一屏看个大概（详细的在「用量」页），默认收着，不占地方
+    ACT = {"kb_info": "看概况", "kb_list": "翻列表", "kb_search": "搜索", "kb_read": "看内容",
+           "kb_download": "下载原件", "kb_bundle": "打包下载", "kb_link": "要了限时链接",
+           "kb_files": "打开资料页", "kb_request": "提了申请", "kb_me": "看自己权限"}
+    try:
+        _rec = [r for r in USAGE.read_audit(state_root, wid, 7) if r.get("ok")][-8:][::-1]
+    except Exception:
+        _rec = []
+    recent = ""
+    if _rec:
+        rrows = []
+        for r in _rec:
+            did = (r.get("args") or {}).get("doc_id") or ""
+            e = docs_all.get(did) or {}
+            what = e.get("title") or r.get("title") or (did[:8] if did else "—")
+            rrows.append('<tr><td class="nowrap w-time">'
+                         + esc(str(r.get("ts") or "")[:16].replace("T", " "))
+                         + '</td><td class="nowrap">' + esc(str(r.get("principal") or "-"))
+                         + "</td><td>" + esc(ACT.get(str(r.get("tool")), str(r.get("tool") or "")))
+                         + '</td><td class="ellip" title="' + esc(str(what)) + '">'
+                         + esc(str(what)) + "</td></tr>")
+        recent = ('<details class="adv" id="recent"><summary>最近动态（' + str(len(_rec)) + ' 条）</summary>'
+                  '<table class="ftable rtable" style="margin-top:10px">'
+                  '<tr><th style="width:132px">时间</th><th style="width:104px">谁</th>'
+                  '<th style="width:96px">做了什么</th><th>哪篇</th></tr>' + "".join(rrows) + "</table>"
+                  '<p style="margin:8px 0 0"><a class="btnlabel ghost" href="'
+                  + qlink("/admin/usage") + '">看全部用量</a></p></details>')
+
     return ("<h2>资料</h2><p class=\"lead\">" + stat + "</p>" + upload
             + scanform
             + "<h3>文件夹</h3>" + fsection
@@ -1196,7 +1283,9 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
                    "「看原件」= 你自己预览，不受等级限制，也不占同事的地址。") + "</div>"
             + "</form>"
 
-            + js + dragjs)
+            + recent
+
+            + js + dragjs + filtjs)
 
 
 # 每个入口/动作落在哪个页签上（POST 完要回到同一页，别跳来跳去）

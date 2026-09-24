@@ -819,6 +819,28 @@ def cmd_title(a) -> int:
     return 0
 
 
+def cmd_watch_downloads(a) -> int:
+    """只看新的：高等级资料被人下载 / 打包 / 要链接时，打一行中文（没有新的就什么都不打）。
+
+    给 cron / watchdog 用 —— 空输出 = 不发消息，零打扰；`--peek` 只看不动 offset。
+    """
+    import kb_watch as W
+    cfg, _root, state = _win(a.window)
+    levels = ([x.strip() for x in (a.levels or "").split(",") if x.strip()]
+              or [C.window_kb_levels(cfg)[-1]])
+    state_file = Path(a.state).expanduser() if a.state else (
+        Path(state) / "state" / f"kb-watch-{a.window}.offset")
+    rows = W.watch(state, a.window, levels, state_file,
+                   skip_admin=not a.include_admin, skip=tuple(a.skip_principal or ()),
+                   peek=a.peek)
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        for r in rows:
+            print(W.fmt_line(r))
+    return 0
+
+
 def cmd_rmdir(a) -> int:
     """删文件夹 = 整棵进回收站（和网页上「删除（进回收站）」同一套语义）。"""
     cfg, root, state = _win(a.window)
@@ -1200,6 +1222,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--enable", action="store_true"); p.add_argument("--delete", action="store_true")
     p.set_defaults(fn=cmd_code_off)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
+    p = sub.add_parser("watch-downloads"); p.add_argument("window"); p.add_argument("--levels", default=""); p.add_argument("--state", default=""); p.add_argument("--include-admin", action="store_true", dest="include_admin"); p.add_argument("--skip-principal", action="append", dest="skip_principal", default=[]); p.add_argument("--peek", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_watch_downloads)
     p = sub.add_parser("mkdir"); p.add_argument("window"); p.add_argument("path"); p.set_defaults(fn=cmd_mkdir)
     p = sub.add_parser("rmdir"); p.add_argument("window"); p.add_argument("path"); p.set_defaults(fn=cmd_rmdir)
     p = sub.add_parser("mv"); p.add_argument("window"); p.add_argument("doc"); p.add_argument("--to", default=""); p.set_defaults(fn=cmd_mv)

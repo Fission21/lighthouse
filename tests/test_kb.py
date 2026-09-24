@@ -931,12 +931,18 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
           (cat["docs"].get(did2) or {}).get("status") == "approved"
           and (cat["docs"].get(did2) or {}).get("level") == "L2-技术")
 
-    # ⑨ 筛选（管理页按状态/关键词看）
+    # ⑨ 筛选（管理页按状态/关键词看）—— 只看「资料清单」里的行，
+    # 别整页搜字：页面上别的地方（最近动态等）也会出现同样的标题。
+    def listed(b: str) -> list[str]:
+        return re.findall(r'class="titlin" name="title_[^"]+" value="([^"]*)"', b)
+
     st, body = http(f"{base}/admin?k={admin}&status=pending")
-    check("按状态筛选：只看待批", "上传自检" not in body and "资料清单" in body)
+    check("按状态筛选：只看待批", "上传自检" not in listed(body) and "资料清单" in body,
+          str(listed(body)[:4]))
     from urllib.parse import quote as _q
     st, body = http(f"{base}/admin?k={admin}&q={_q('拓扑')}")
-    check("按关键词搜：只列匹配的", "拓扑说明" in body and "上传表格" not in body)
+    check("按关键词搜：只列匹配的", "拓扑说明" in listed(body) and "上传表格" not in listed(body),
+          str(listed(body)[:4]))
 
     # ⑩ 审计：上传/入库/批量都留痕
     rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
@@ -1218,6 +1224,109 @@ def _audit_rows(state: Path) -> list[dict]:
     if not f.is_file():
         return []
     return [json.loads(x) for x in f.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+
+# ---------------------------------------------------------------- ⑮ 大库导航 + 敏感下载守望
+
+def part_nav(state: Path, env: dict, site: str):
+    """大库导航（排序 / 筛文件夹 / 最近动态）与「核心资料被人下载就报一声」。"""
+    print("\n⑮ 大库导航：点表头排序 · 筛文件夹 · 最近动态　＋　敏感下载守望")
+    import kb as KB
+    import kb_watch as W
+    import kb_web as WEB
+
+    base = site + "/w-kb1-test"
+    admin = WEB.ensure_admin_token(state)
+
+    # ---- 排序：只在你点了表头时才改顺序 ----
+    st, body = http(f"{base}/admin?k={admin}")
+    check("表头能点：资料/状态/等级/文件夹 四个排序入口",
+          st == 200 and body.count('class="thlink') >= 4 and "sort=level" in body
+          and "再点一次反过来" in body)
+    st, b_asc = http(f"{base}/admin?k={admin}&sort=level&ord=asc")
+    st, b_desc = http(f"{base}/admin?k={admin}&sort=level&ord=desc")
+    def order(b: str) -> list[str]:
+        return re.findall(r'class="titlin" name="title_[^"]+" value="([^"]*)"', b)
+
+    a, d = order(b_asc), order(b_desc)
+    lv_of = {str(e.get("title")): str(e.get("level")) for e in KB.load_catalog(state, "kb1")[0]["docs"].values()}
+    idx = lambda t: LEVELS.index(lv_of[t]) if lv_of.get(t) in LEVELS else 99  # noqa: E731
+    check("按等级升序：L1 在前、L3 在后（真的按档排了）",
+          len(a) >= 3 and [idx(t) for t in a] == sorted(idx(t) for t in a), str([idx(t) for t in a]))
+    check("按等级降序：正好反过来",
+          [idx(t) for t in d] == sorted((idx(t) for t in d), reverse=True), str([idx(t) for t in d]))
+    st, b_t = http(f"{base}/admin?k={admin}&sort=title&ord=asc")
+    check("按资料名排序：按标题字典序", order(b_t) == sorted(order(b_t), key=str.lower), order(b_t)[:3])
+    st, b_st = http(f"{base}/admin?k={admin}&sort=status&ord=asc")
+    check("按状态排序：同一状态的排在一起",
+          order(b_st) and len(order(b_st)) == len(order(b_asc)))
+    st, b_dir = http(f"{base}/admin?k={admin}&sort=dir&ord=asc")
+    check("按文件夹排序能出结果（不是 500）", st == 200 and len(order(b_dir)) == len(order(b_asc)))
+    st, b_fd = http(f"{base}/admin?k={admin}&dir={quote('技术')}&sort=title&ord=asc")
+    check("在文件夹里点排序：链接带着当前文件夹（不会一跳回根目录）",
+          "dir=%E6%8A%80%E6%9C%AF&sort=" in b_fd and "sort=title" in b_fd)
+
+    # ---- 筛文件夹（纯前端，但控件得在）----
+    st, body = http(f"{base}/admin?k={admin}")
+    check("文件夹区有筛选框（不刷新、不联网）",
+          st == 200 and 'id="ffilter"' in body and "只在浏览器里筛" in body
+          and "querySelectorAll('tr.frow')" in body)
+
+    # ---- 最近动态 ----
+    st, body = http(f"{base}/admin?k={admin}")
+    check("资料页有「最近动态」（默认收着，能跳到用量页）",
+          st == 200 and re.search(r"最近动态（\d+ 条）", body) is not None
+          and "/admin/usage?" in body and "<details class=\"adv\">" in body)
+
+    # ---- 敏感下载守望 ----
+    did_core = KB.doc_id("原始文档/核心/核心网架构.md")            # L3-核心
+    did_biz = next(e["id"] for e in KB.load_catalog(state, "kb1")[0]["docs"].values()
+                   if e["title"] == "报价单")                     # L1-商务
+    off = state / "kb-watch-test.offset"
+    audit = state / "audit" / "kb1.jsonl"
+    audit.parent.mkdir(parents=True, exist_ok=True)
+
+    def w(levels, **kw):
+        return W.watch(state, "kb1", levels, off, **kw)
+
+    def row(tool, did, who="李四", ok=True):
+        with open(audit, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": "2026-09-24T18:00:00+08:00", "tool": tool, "ok": ok,
+                                 "principal": who, "levels": ["L1-商务", "L3-核心"], "ip": "203.0.113.9",
+                                 "args": {"doc_id": did, "mode": "original", "bytes": 2048}},
+                                ensure_ascii=False) + "\n")
+
+    off.write_text("0")
+    row("kb_download", did_core)
+    got = w(["L3-核心"])
+    check("守望：下载核心资料 → 报一条（谁/哪篇/等级/来源 IP 都有）",
+          len(got) == 1 and got[0]["who"] == "李四" and "核心网架构" in W.fmt_line(got[0])
+          and "203.0.113.9" in W.fmt_line(got[0]), W.fmt_line(got[0]) if got else "（没报）")
+    check("守望：同一件事不会重复报（offset 记住了）", w(["L3-核心"]) == [])
+    row("kb_download", did_biz)
+    check("守望：只看核心档 → 商务档的下载不吵人", w(["L3-核心"]) == [])
+    row("kb_link", did_core)
+    check("守望：要限时链接也算（等于把文件给出去了）", len(w(["L3-核心"])) == 1)
+    row("kb_download", did_core, who="维护者(管理令)")
+    check("守望：维护者自己的操作默认不报（不吵自己）", w(["L3-核心"], peek=True) == [])
+    check("守望：--include-admin 时连维护者的也报", len(w(["L3-核心"], skip_admin=False)) == 1)
+    row("kb_download", did_core, who="自己人")
+    check("守望：--skip-principal 能把不想吵的账号静音",
+          w(["L3-核心"], skip=("自己人",), peek=True) == [])
+    _before = len(w(["L3-核心"], peek=True))
+    row("kb_download", did_core, ok=False)
+    check("守望：失败/被拒的调用不算（没真的拿走东西）",
+          len(w(["L3-核心"], peek=True)) == _before)
+    off.write_text("0")
+    one = w(["L3-核心"], peek=True)
+    two = w(["L3-核心"], peek=True)
+    check("守望：--peek 只看不动 offset（连着看两次结果一样、都没吃掉）",
+          len(one) >= 1 and [r["ts"] for r in one] == [r["ts"] for r in two]
+          and off.read_text().strip() == "0", f"{len(one)} 条 / offset={off.read_text().strip()}")
+
+    # CLI 子命令（跟 cron 用的是同一条）
+    out, code = cli("kb", "watch-downloads", "kb1", "--levels", "L3-核心", "--peek", env=env)
+    check("CLI：kb watch-downloads 能跑（--peek 只读）", code == 0 and "⚠️" in out, out[-160:])
 
 
 # ---------------------------------------------------------------- ⑨ 同事管理：改等级与其它
@@ -1789,6 +1898,7 @@ async def main() -> int:
         part_suggest(site, state, lib, env)
         await part_users(site, state, zhang)
         part_track(state, env, zhang)
+        part_nav(state, env, site)
     finally:
         srv.terminate()
         try:

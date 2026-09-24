@@ -426,7 +426,46 @@ async def main() -> int:
           json.dumps(lay3, ensure_ascii=False))
     await snap("同事页-手机", width=390, full=False)
 
-    print("\n【7】管理页手机宽度")
+    print("\n【7】大库导航：点表头排序 · 筛文件夹 · 最近动态")
+    await pg.open(admin_url)
+    await wait_ready(pg, "tr.docrow")
+    async def order_now() -> str:
+        return str(await pg.js(
+            "[...document.querySelectorAll('input.titlin')].map(i=>i.value).join(' | ')"))
+
+    o0 = await order_now()
+    await click(pg, "th a.thlink[href*='sort=level']", "tr.docrow")
+    u1 = str(await pg.js("location.search"))
+    o1 = await order_now()
+    check("点表头「等级」→ 地址带上 sort=level，当前列有标记",
+          "sort=level" in u1 and bool(await pg.js("!!document.querySelector('th a.thlink.on')")),
+          u1[:70])
+    await click(pg, "th a.thlink[href*='sort=level']", "tr.docrow")
+    u2 = str(await pg.js("location.search"))
+    o2 = await order_now()
+    check("同一列表头再点一次 → 反过来（升↔降真的换了顺序）",
+          "ord=desc" in u2 and o1 != o2 and o0 != "" and len(o1) > 3,
+          f"升：{o1[:46]} ／ 降：{o2[:46]}")
+    await snap("管理页-按等级排序")
+
+    n_f = int(await pg.js("document.querySelectorAll('tr.frow').length") or 0)
+    await pg.js("(() => { const i=document.getElementById('ffilter'); i.focus(); return true; })()")
+    await pg.cmd("Input.insertText", text="技术")
+    await asyncio.sleep(0.5)
+    shown = int(await pg.js(
+        "[...document.querySelectorAll('tr.frow')].filter(r=>r.style.display!=='none').length") or 0)
+    check("在「筛文件夹」里打字 → 只剩匹配的（其余行藏起来，不刷新）",
+          n_f > 1 and shown == 1, f"{n_f} 个文件夹 → 显示 {shown} 个")
+    await snap("管理页-筛文件夹")
+    await pg.js("(() => { const i=document.getElementById('ffilter'); i.value='';"
+                " i.dispatchEvent(new Event('input')); return true; })()")
+
+    await click(pg, "#recent summary", "table")
+    n_rec = int(await pg.js("document.querySelectorAll('#recent table tr').length") or 0)
+    check("「最近动态」点开有内容（谁 · 做了什么 · 哪篇）", n_rec >= 2, f"{n_rec} 行")
+    await snap("管理页-最近动态")
+
+    print("\n【8】管理页手机宽度")
     await pg.open(admin_url)
     await wait_ready(pg, "table")
     lay4 = await layout(pg, 390)

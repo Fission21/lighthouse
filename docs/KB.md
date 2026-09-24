@@ -244,6 +244,17 @@ bash lighthouse.sh restart bidkb             # 重启窗口生效
 否则「删 /etc/x」会变成删库里的 `etc/x`）；落盘前再 `resolve()` 确认还在资料库内。
 移动文件会让 `doc_id` 变（按路径算），**已发出的 15 分钟限时链接会失效**，MCP 地址不受影响。
 
+## 四·六·六、大库导航（资料多了以后）
+
+资料上百篇、文件夹几十个之后，靠眼睛找不现实，页面上给了三样：
+
+- **点表头排序**：「资料 / 状态 / 等级 / 文件夹」四个表头都能点，点一下按它排、再点一下反过来，
+  当前列带箭头。排序链接会带着你当前的筛选和所在文件夹，不会一跳回根目录。默认顺序是「文件夹 → 标题」。
+- **筛文件夹**：文件夹区右上角一个框，打字即时筛（纯浏览器里筛，不刷新、不联网）。
+  只筛**当前这一层**的文件夹名 —— 要跨层找，先用面包屑进到那一层。
+- **最近动态**：资料页底部一块默认收着的「最近动态」（时间 / 谁 / 做了什么 / 哪篇）。
+  一眼看个大概，要看全量（按人、按天、按资料）去「用量」页。
+
 ## 四·七、同事改权限（管理页 / 命令行都行）
 
 管理页「已授权的同事」里每人一行 = 一个完整小表单：**等级可多选**（勾哪几档看哪几档）、姓名/部门/备注、
@@ -372,7 +383,7 @@ bash lighthouse.sh kb usage bidkb --days 7 --csv > 用量.csv
 - 判断依据是「有没有云端转发头」：带 `CF-Connecting-IP`/`X-Forwarded-For` 的请求默认直接 403，
   所以哪怕域名被人猜到，管理页在关闭状态下也打不开。
 
-## 七、让 agent 帮你盯申请
+## 七、让 agent 帮你盯申请和下载
 
 ```bash
 bash lighthouse.sh kb notify bidkb            # 列出还没汇报过的新申请（自动放行的也在内）
@@ -380,8 +391,21 @@ bash lighthouse.sh kb notify bidkb --json     # 机器可读
 bash lighthouse.sh kb notify bidkb --ack      # 汇报完打标，避免重复提醒
 ```
 
-配合定时任务（Hermes cron / launchd / 系统 crontab）每隔几分钟跑一次 `kb notify bidkb`，
-有新申请就让 agent 告诉你。**申请只读不写**：MCP 侧没有任何写台账的能力，
+核心资料被人拿走，也可以让它盯：
+
+```bash
+bash lighthouse.sh kb watch-downloads bidkb                     # 只看新的（没有就不输出）
+bash lighthouse.sh kb watch-downloads bidkb --levels "L2-技术,L3-核心"
+bash lighthouse.sh kb watch-downloads bidkb --skip-principal "某人"   # 这个人的操作别吵我
+bash lighthouse.sh kb watch-downloads bidkb --include-admin --json    # 连维护者自己的也报
+```
+
+它只看**上次看过之后新出现的**下载 / 打包 / 要限时链接（按行号记 offset，重复跑不会重复报），
+默认看住**最高一档**、不报维护者自己的操作；失败或被拒的调用不算（没真的拿走东西）。
+**没有新东西就什么都不输出** —— 正好配 cron 的 watchdog 模式（空输出 = 不发消息，零打扰）。
+
+配合定时任务（Hermes cron / launchd / 系统 crontab）每隔几分钟跑一次 `kb notify bidkb` /
+`kb watch-downloads bidkb`，有事就让 agent 告诉你。两个都**只读**：MCP 侧没有任何写台账的能力，
 同事的 AI 无论如何都改不了「谁能看什么」。
 
 ## 八、部署坑：资料库别放在被系统保护的目录里
@@ -405,4 +429,6 @@ $ log show --last 15m --predicate 'eventMessage CONTAINS "Documents"'
 - `kb_read` 返回的是**抽取后的文本**，不是原件；原件（.docx/.pdf）不对外。
 - 台账、同事记录、管理令都在本机 `<状态目录>` 下，权限等同你的账号。
 - 地址泄漏的止损动作是 `kb rotate`（换地址）或 `kb revoke`（停用），都是立即生效。
-- 没有做的事：不做全文向量检索、不做原件下载、不做多窗口共享台账、不做同事自助改权限。
+- 没有做的事：不做全文向量检索、不做多窗口共享台账、不做同事自助改权限。
+- 原件下载是有的（可关）：默认只给「等级内有」的资料、签名链接 15 分钟到期、单文件 50MB / 打包 200MB。
+  谁下载了什么都会进审计，`kb watch-downloads` 就是读它。
