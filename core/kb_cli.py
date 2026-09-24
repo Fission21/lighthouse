@@ -20,6 +20,9 @@
   kb_cli.py passwd <窗口> --admin                          # 给自己设管理员网页密码（打印一次）
   kb_cli.py passwd <窗口> --user zhangsan --person 张三     # 给同事开通网页账号
   kb_cli.py accounts <窗口>                                # 列出网页账号
+  kb_cli.py code <窗口> --levels "L2-技术" --for 30d --person 张三  # 生成邀请码（同事凭它注册）
+  kb_cli.py codes <窗口> [--links]                         # 邀请码状态 + 谁用了 + 注册链接
+  kb_cli.py code-off <窗口> --code XXXX-XXXX [--delete]    # 停用/恢复/删除邀请码
   kb_cli.py rotate <窗口> --name 张三                       换一条新地址（旧的立即失效）
   kb_cli.py revoke <窗口> --name 张三 [--enable]
   kb_cli.py invite <窗口> --name 张三 --out 文件.md [--level L] [--for 30d]
@@ -44,7 +47,8 @@ sys.path.insert(0, str(ROOT / "core"))
 import config as C          # noqa: E402
 import kb as KB             # noqa: E402
 import kb_access as ACC
-import kb_auth as AUTH     # noqa: E402
+import kb_auth as AUTH
+import kb_invite as INV     # noqa: E402
 import kb_ingest as ING     # noqa: E402
 import kb_usage as USAGE    # noqa: E402
 import kb_web as WEB        # noqa: E402
@@ -374,9 +378,90 @@ def cmd_decide(a) -> int:
     return 0
 
 
+def cmd_code(a) -> int:
+    """生成邀请码（同事凭它自助注册）。等级/有效期/指定给谁都能定。"""
+    cfg, _root, state = _win(a.window)
+    picks = [x.strip() for x in str(a.levels or "").replace("，", ",").split(",") if x.strip()]
+    cfg_levels = list((cfg.get("kb") or {}).get("levels") or [])
+    bad = [x for x in picks if x not in cfg_levels]
+    if bad or not picks:
+        print(f"❌ 等级要填至少一个、且在 {cfg_levels} 里（逗号分隔）")
+        return 1
+    days = 30
+    raw = str(a.for_days or "30d").strip().lower()
+    try:
+        days = 0 if raw in ("0", "never", "无期限") else int(raw.rstrip("d"))
+    except ValueError:
+        print("❌ --for 写成 30d / 7d / 0（不过期）")
+        return 1
+    rec = INV.create(state, a.window, levels=picks, person=a.person or "", note=a.note or "",
+                     days=days, max_uses=max(1, int(a.uses or 1)), actor="cli")
+    base = _public_url(cfg, a.window).rstrip("/")
+    print(f"✅ 邀请码：{rec['code']}")
+    print(f"   等级：  {'、'.join(picks)}")
+    if rec.get("person"):
+        print(f"   指定给：{rec['person']}（别人拿这张码注册会被拒）")
+    print(f"   有效期：{'不过期' if not rec.get('expires') else INV.fmt(rec['expires']) + ' 前有效'}"
+          f"　可用 {rec['max_uses']} 次")
+    if rec.get("note"):
+        print(f"   备注：  {rec['note']}")
+    print(f"   发这个链接给他：{base}/register?c={rec['code']}")
+    return 0
+
+
+def cmd_codes(a) -> int:
+    """列出邀请码：状态、谁用了、什么时候用的。"""
+    cfg, _root, state = _win(a.window)
+    rows = INV.list_codes(state, a.window)
+    if not rows:
+        print("还没有邀请码。生成一张：bash lighthouse.sh kb invite " + a.window +
+              ' --levels "L1-商务" --for 30d')
+        return 0
+    s = INV.summary(state, a.window)
+    print(f"{'邀请码':<14} {'等级':<18} {'状态':<8} {'给谁':<10} 使用")
+    for r in rows:
+        uses = r.get("uses") or []
+        used = ("；".join(f"{u.get('person')} {INV.fmt(u.get('at'))}" for u in uses)
+                if uses else "—")
+        print(f"{(r['code'] or ''):<14} {('、'.join(r.get('levels') or [])):<18} "
+              f"{INV.status(r):<8} {(r.get('person') or '不限'):<10} {used}")
+    print(f"\n共 {s['total']} 张：可用 {s['available']} · 已用完 {s['used']} · "
+          f"已过期 {s['expired']} · 已停用 {s['disabled']}")
+    if a.links:
+        base = _public_url(cfg, a.window).rstrip("/")
+        print("\n注册链接：")
+        for r in rows:
+            if INV.status(r) == "可用":
+                print(f"  {r['code']}  {base}/register?c={r['code']}")
+    return 0
+
+
+def cmd_code_off(a) -> int:
+    """停用 / 恢复 / 删除一张邀请码。"""
+    _cfg, _root, state = _win(a.window)
+    if a.delete:
+        ok = INV.delete(state, a.window, a.code)
+        print(f"✅ 已删除 {INV.pretty(a.code)}" if ok else "❌ 没这张码")
+        return 0 if ok else 1
+    ok = INV.revoke(state, a.window, a.code, enabled=bool(a.enable))
+    print((f"✅ 已{'恢复' if a.enable else '停用'} {INV.pretty(a.code)}") if ok else "❌ 没这张码")
+    return 0 if ok else 1
+
+
 def cmd_passwd(a) -> int:
     """给别人（或自己）设网页登录密码：不指定就用随机强密码，明文只打印这一次。"""
     cfg, _root, state = _win(a.window)
+    if a.delete:
+        user = (a.user or "").strip()
+        if not user:
+            print("❌ 要删哪个账号？用 --user 用户名")
+            return 1
+        ok = AUTH.delete_account(state, user)
+        if ok:
+            _audit(state, a.window, "kb_account_delete", {"user": user}, True, {"actor": "cli"})
+        print(f"✅ 已删掉账号「{user}」（他再也登不进网页了；地址不受影响）" if ok
+              else f"❌ 没有账号「{user}」")
+        return 0 if ok else 1
     if a.admin:
         user = (a.user or "admin").strip()
         role, person = "admin", (a.person or "主人")
@@ -714,8 +799,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--admin", action="store_true", help="给自己（管理员）设密码")
     p.add_argument("--password", default=None, help="自己指定密码（不给就随机生成）")
     p.add_argument("--person", default=None, help="绑定到哪位同事（默认同名）")
-    p.add_argument("--length", type=int, default=14); p.set_defaults(fn=cmd_passwd)
+    p.add_argument("--length", type=int, default=14)
+    p.add_argument("--delete", action="store_true", help="删掉这个网页账号")
+    p.set_defaults(fn=cmd_passwd)
     p = sub.add_parser("accounts"); p.add_argument("window"); p.set_defaults(fn=cmd_accounts)
+    p = sub.add_parser("code"); p.add_argument("window")
+    p.add_argument("--levels", required=True, help='等级，逗号分隔，如 "L2-技术"')
+    p.add_argument("--for", dest="for_days", default="30d", help="码的有效期：30d / 7d / 0（不过期）")
+    p.add_argument("--person", default=None, help="指定给谁（填了就只有这个人能注册）")
+    p.add_argument("--note", default=None, help="备注：给谁/什么项目")
+    p.add_argument("--uses", type=int, default=1, help="可用次数（默认 1）")
+    p.set_defaults(fn=cmd_code)
+    p = sub.add_parser("codes"); p.add_argument("window")
+    p.add_argument("--links", action="store_true", help="同时打印可用的注册链接")
+    p.set_defaults(fn=cmd_codes)
+    p = sub.add_parser("code-off"); p.add_argument("window")
+    p.add_argument("--code", required=True)
+    p.add_argument("--enable", action="store_true"); p.add_argument("--delete", action="store_true")
+    p.set_defaults(fn=cmd_code_off)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)

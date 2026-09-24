@@ -1104,8 +1104,8 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = login(site + "/w-kb1-test", "logintester", pw2)
     check("同事也能登录（他自己的账号）", st == 200 and "登录成功" in body, f"HTTP {st}")
     st, body = http(f"{base}/admin")
-    check("同事登录后进不了管理页（角色不够）",
-          st in (401, 403) and ("不是管理员" in body or "需要登录" in body), f"HTTP {st}")
+    check("同事登录后进不了管理页（说清是管理页面，不是让他重新登录）",
+          st == 403 and "只有维护者能进" in body, f"HTTP {st}")
     st, body = http(f"{base}/files")
     check("同事登录后能看资料页（只列他等级的）", st == 200 and "我的资料" in body, f"HTTP {st}")
     check("资料页里只有他有权限的等级", "L2-技术" not in body or "无权" in body, "")
@@ -1145,7 +1145,148 @@ async def part_auth(site: str, state: Path, admin_pw: str):
           any("ip" in r and "ua" in r for r in rows if r.get("tool") == "portal_login"))
 
 
+# ---------------------------------------------------------------- ⑪ 邀请码注册
+async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
+    """邀请码：管理员发码、同事凭码注册，全程可追踪。"""
+    print("\n⑪ 邀请码注册：发码 → 凭码注册 → 追踪到人")
+    import kb_auth as AUTH
+    import kb_access as ACC
+    import kb_invite as INV
+    import kb as KB
 
+    base = site + "/w-kb1-test"
+    admin = None
+    import kb_web as WEB
+    admin = WEB.ensure_admin_token(state)
+
+    # ---- 管理员生成邀请码（带等级、指定给人、有效期）----
+    st, body = http(f"{base}/admin", cookie="")
+    check("管理页有邀请码区块（无管理令也能看到登录要求）", st == 401 or "邀请码" in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin?k={admin}")
+    check("管理页里有「邀请码」一节 + 生成表单",
+          st == 200 and "邀请码（同事凭它自助注册）" in body and 'name="max_uses"' in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin/invite", data={"k": admin, "levels": "L2-技术", "days": "30",
+                                                  "person": "注册测试员", "max_uses": "1",
+                                                  "note": "XX 项目", "action": "create"})
+    rec = INV.list_codes(state, "kb1")[0]
+    check("生成邀请码：等级/指定给谁/有效期/备注都记下了",
+          st == 200 and rec["levels"] == ["L2-技术"] and rec["person"] == "注册测试员"
+          and rec["note"] == "XX 项目", f"HTTP {st}")
+    check("邀请码格式好念好抄（大写 + 中间横杠）",
+          "-" in rec["code"] and rec["code"] == rec["code"].upper(), rec["code"])
+    check("生成回执里给了注册链接（带码）",
+          f"/register?c={rec['code']}" in body, body[:60])
+
+    # ---- 注册页：不需要登录，但要码 ----
+    st, body = http(f"{base}/register", cookie="")
+    check("注册页可访问（不登录）且要填邀请码/用户名/密码",
+          st == 200 and 'name="code"' in body and 'name="user"' in body and 'name="pw2"' in body, f"HTTP {st}")
+    st, body = http(f"{base}/register?c={rec['code']}", cookie="")
+    check("带码打开注册页 → 会提示这张码是给谁的",
+          st == 200 and "注册测试员" in body, f"HTTP {st}")
+    st, body = http(f"{base}/register", cookie="",
+                    data={"code": "WRONG-CODE", "name": "注册测试员", "dept": "x", "purpose": "x",
+                          "user": "regtester", "pw": "aaaaaaaa", "pw2": "aaaaaaaa"})
+    check("码不对 → 拒（并说明）", st == 400 and "邀请码不对" in body, f"HTTP {st}")
+    check("码不对时不会留下账号或地址",
+          AUTH.get(state, "regtester") is None and ACC.get_user(state, "kb1", "注册测试员") is None)
+
+    # ---- 校验逐条 ----
+    good = {"code": rec["code"], "name": "冒名者", "dept": "x", "purpose": "x",
+            "user": "mrm", "pw": "aaaaaaaa", "pw2": "aaaaaaaa"}
+    st, body = http(f"{base}/register", cookie="", data=good)
+    check("码指定了人 → 换个名字注册被拒", st == 400 and "是给" in body, f"HTTP {st}")
+    bad_pw = dict(good, name="注册测试员", user="regtester", pw="aaaaaaaa", pw2="bbbbbbbb")
+    st, body = http(f"{base}/register", cookie="", data=bad_pw)
+    check("两次密码不一致 → 拒", st == 400 and "不一样" in body, f"HTTP {st}")
+    short_pw = dict(bad_pw, pw="a123456", pw2="a123456")
+    st, body = http(f"{base}/register", cookie="", data=short_pw)
+    check("密码太短 → 拒", st == 400 and "至少 8 位" in body, f"HTTP {st}")
+    hijack = dict(short_pw, pw="aaaaaaaa", pw2="aaaaaaaa", user="admin")
+    st, body = http(f"{base}/register", cookie="", data=hijack)
+    check("想注册成 admin → 被拒（用户名已占用）", st == 400 and "已经被用了" in body, f"HTTP {st}")
+    baduser = dict(hijack, user="a b", )
+    st, body = http(f"{base}/register", cookie="", data=baduser)
+    check("用户名带空格 → 拒", st == 400 and "只能用字母和数字" in body, f"HTTP {st}")
+
+    # ---- 正常注册 ----
+    okf = dict(code=rec["code"], name="注册测试员", dept="技术部", purpose="投标资料",
+           user="regtester", pw="Str0ngPass2026", pw2="Str0ngPass2026")
+    st, body = http(f"{base}/register", cookie="", data=okf)
+    check("凭码注册成功 → 页面同时给地址和账号",
+          st == 200 and "/kb-" in body and "regtester" in body, f"HTTP {st}")
+    u = ACC.get_user(state, "kb1", "注册测试员")
+    check("注册后自动拿到地址（等级=码上定的 L2-技术）",
+          bool(u) and u["levels"] == ["L2-技术"], str(u and u["levels"]))
+    check("注册后账号能登录（用他自己设的密码）", AUTH.verify_login(state, "regtester",
+                                                                 "Str0ngPass2026", "1.1.1.1")[0])
+    rec2 = next(r for r in INV.list_codes(state, "kb1") if r["code"] == rec["code"])
+    check("邀请码被标记为已用（一码一人）",
+          len(rec2.get("uses") or []) == 1 and INV.status(rec2) == "已用完",
+          f'{INV.status(rec2)} ×{len(rec2.get("uses") or [])}')
+    check("使用记录里有：谁、什么时候、什么 IP",
+          all(k in (rec2["uses"][0] or {}) for k in ("person", "at", "ip")), str(rec2["uses"][0])[:80])
+    st, body = http(f"{base}/register", cookie="",
+                    data=dict(okf, name="第二个人", user="second1", pw="Str0ngPass2026", pw2="Str0ngPass2026"))
+    check("同一张码再用一次 → 拒（已用完）", st == 400 and "用不了了" in body, f"HTTP {st}")
+    rec_dup = INV.create(state, "kb1", levels=["L1-商务"], days=7, note="重复注册测试")
+    st, body = http(f"{base}/register", cookie="",
+                    data={"code": rec_dup["code"], "name": "注册测试员", "dept": "x", "purpose": "x",
+                          "user": "dupper1", "pw": "aaaaaaaa", "pw2": "aaaaaaaa"})
+    check("已经领过地址的人再拿一张新码注册 → 拒（避免一人两条地址）",
+          st == 400 and "已经领过地址" in body, f"HTTP {st}")
+
+    # ---- 角色边界：新注册的同事只能看自己等级 ----
+    login(base, "regtester", "Str0ngPass2026")
+    site_root = site
+    st_a, body_a = http(f"{base}/admin")
+    check("注册的同事登录后进不了管理页（并说清是管理页面，别让他以为掉线）",
+          st_a == 403 and "只有维护者能进" in body_a, f"HTTP {st_a}")
+    st, body = http(f"{base}/files")
+    check("注册的同事能看到资料页（自己等级内的）", st == 200 and "我的资料" in body, f"HTTP {st}")
+    SESSION["cookie"] = ""
+
+    # ---- 停用 / 删除 ----
+    rec3 = INV.create(state, "kb1", levels=["L1-商务"], days=7, note="给停用的")
+    st, body = http(f"{base}/admin/invite", data={"k": admin, "code": rec3["code"], "action": "revoke"})
+    check("停用一张码 → 状态变成已停用",
+          INV.status(next(r for r in INV.list_codes(state, "kb1") if r["code"] == rec3["code"])) == "已停用")
+    st, body = http(f"{base}/register", cookie="", data={"code": rec3["code"], "name": "停用测试",
+                                                         "dept": "x", "purpose": "x", "user": "stopper",
+                                                         "pw": "aaaaaaaa", "pw2": "aaaaaaaa"})
+    check("停用的码注册不了", st == 400 and "用不了了" in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin/invite", data={"k": admin, "code": rec3["code"], "action": "delete"})
+    check("删除一张码 → 表里没了",
+          all(r["code"] != rec3["code"] for r in INV.list_codes(state, "kb1")))
+    st, body = http(f"{base}/admin/invite", data={"k": admin, "levels": "", "action": "create"})
+    check("生成时不勾等级 → 拒（免得发出没有权限的码）",
+          "至少勾一个等级" in body, body[:70])
+
+    # ---- 过期 ----
+    old = INV.create(state, "kb1", levels=["L1-商务"], days=1, note="过期测试")
+    d = INV.load(state); d["kb1"][old["code"]]["expires"] = time.time() - 60; INV.save(state, d)
+    st, body = http(f"{base}/register", cookie="", data={"code": old["code"], "name": "过期测试",
+                                                         "dept": "x", "purpose": "x", "user": "expired1",
+                                                         "pw": "aaaaaaaa", "pw2": "aaaaaaaa"})
+    check("过期的码注册不了", st == 400 and "已过期" in body, f"HTTP {st}")
+
+    # ---- 审计 ----
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("审计：生成邀请码留痕", any(r.get("tool") == "kb_invite_create" for r in rows))
+    check("审计：用码注册留痕（成功与失败都有）",
+          any(r.get("tool") == "portal_register" and r.get("ok") for r in rows)
+          and any(r.get("tool") == "portal_register" and r.get("ok") is False for r in rows))
+    check("审计：码使用单独留痕（带人/等级/IP）",
+          any(r.get("tool") == "kb_invite_use" and "ip" in r for r in rows))
+    check("审计：停用/删除码留痕",
+          any(r.get("tool") == "kb_invite_revoke" for r in rows)
+          and any(r.get("tool") == "kb_invite_delete" for r in rows))
+    check("凭码注册在台账里记成「已批准（凭邀请码）」，不占待批列表",
+          not any(r["name"] == "注册测试员" and r["status"] == "pending"
+                  for r in KB.load_requests(state, "kb1")[0]["requests"].values()))
+    check("注册这条也进了申请台账（能对上人）",
+          any(r["name"] == "注册测试员" and "邀请码" in (r.get("purpose") or "")
+              for r in KB.load_requests(state, "kb1")[0]["requests"].values()))
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
@@ -1173,6 +1314,7 @@ async def main() -> int:
         _arec, ADMINPW = AUTH.new_account(state, "admin", role="admin", person="主人")
         zhang = part_cli(env, state, cfg)
         await part_auth(base_url.replace("/w-kb1-test", ""), state, ADMINPW)
+        await part_invite(base_url.replace("/w-kb1-test", ""), state, ADMINPW, lib)
         await part_mcp(base_url, state, zhang)
         part_web(base_url, state, ADMINPW)
         site = base_url.replace("/w-kb1-test", "")

@@ -242,6 +242,8 @@ bash lighthouse.sh kb init bidkb                       # 建资料库骨架
 # 把资料放进 ~/Documents/招投标文档库/原始文档/…
 bash lighthouse.sh kb scan bidkb                       # 抽文本、登记待批
 bash lighthouse.sh kb approve bidkb --all-pending --level L1-商务
+bash lighthouse.sh kb code bidkb --levels "L2-技术" --for 30d --person 张三   # 发邀请码（同事凭它自助注册）
+bash lighthouse.sh kb codes bidkb --links                                   # 邀请码状态 + 谁用了 + 注册链接
 bash lighthouse.sh kb invite bidkb --name 张三 --level "L2-技术" --out 张三-使用说明.md
 ```
 

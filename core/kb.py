@@ -167,7 +167,8 @@ def save_requests(state_root: Path, wid: str, data: dict) -> None:
 
 
 def append_request(state_root: Path, wid: str, *, name: str, dept: str, purpose: str,
-                   level_requested: str, contact: str, ip: str) -> dict:
+                   level_requested: str, contact: str, ip: str, status: str = "pending",
+                   decided_note: str = "", auto: bool = False) -> dict:
     """同事侧**唯一**的写动作：新增一条申请（pending）。
 
     申请的等级只是「申请人想要的」，实际发放等级由维护者定（自动档例外，见 kb_portal）。
@@ -182,8 +183,10 @@ def append_request(state_root: Path, wid: str, *, name: str, dept: str, purpose:
         "purpose": (purpose or "").strip()[:500],
         "level_requested": (level_requested or "").strip(),
         "contact": (contact or "").strip()[:80],
-        "status": "pending", "created_at": now_iso(), "ip": ip,
-        "decided_at": None, "decided_note": "", "auto": False, "notified": False,
+        "status": status, "created_at": now_iso(), "ip": ip,
+        "decided_at": now_iso() if status != "pending" else None,
+        "decided_note": decided_note, "auto": bool(auto),
+        "notified": status != "pending",
     }
     data["requests"][rec["id"]] = rec
     save_requests(state_root, wid, data)

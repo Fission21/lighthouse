@@ -31,6 +31,7 @@ import kb as KB
 import kb_access as ACC
 import kb_download as DL
 import kb_auth as AUTH
+import kb_invite as INV
 import kb_ingest as ING
 import kb_usage as USAGE
 
@@ -233,9 +234,42 @@ def page_login(base: str, nxt: str, msg: str = "", user: str = "") -> bytes:
   <button type="submit">登录</button>
   <span class="hint" style="margin-left:8px">连错 5 次会锁 10 分钟</span>
 </form>
+<p class="hint">有邀请码？<a class="minor" href="{esc(base)}/register">在这里注册</a>（注册后会同时拿到地址和账号）。</p>
 <p class="hint">密码忘了？让维护者在这台机器上执行
 <code>bash lighthouse.sh kb passwd &lt;窗口&gt; --user 你的用户名</code> 重置（会生成新的临时密码）。</p>"""
     return _page("登录", body, base)
+
+
+def page_register(base: str, levels: list[str], msg: str = "", code: str = "",
+                  bound: str = "") -> bytes:
+    """凭邀请码自助注册：填码 + 姓名/部门 + 自设用户名密码 → 当场发地址 + 能登录。"""
+    if bound:
+        who = (f'<div class="ok">这张邀请码是**给 {esc(bound)}** 的：请用本人姓名注册，'
+               '维护者那边能对上号。</div>')
+    else:
+        who = ""
+    body = f"""{msg}{who}
+<p class="lead">这是一个内部资料库。注册需要**维护者发给你的邀请码**（一码一人、有有效期）。
+填完你会同时拿到两样东西：**一条专属地址**（填进你的 AI 助手）和**一个网页账号**（看/下载资料用）。</p>
+<form method="post" action="{esc(base)}/register">
+  <label>邀请码</label><input name="code" value="{esc(code)}" placeholder="例如 A7K2M-9PQRS" required autofocus>
+  <div class="grid2" style="margin-top:10px">
+    <div><label>你的姓名</label><input name="name" maxlength="40" value="{esc(bound)}" required></div>
+    <div><label>部门</label><input name="dept" maxlength="40"></div>
+  </div>
+  <label>用途（给维护者看的）</label><input name="purpose" maxlength="80"
+    placeholder="例如：XX 项目写方案，要参考以前的报价" required>
+  <div class="grid2" style="margin-top:10px">
+    <div><label>网页用户名（登录用）</label><input name="user" maxlength="40"
+      placeholder="字母数字，如 zhangsan" required></div>
+    <div><label>密码（至少 8 位）</label><input type="password" name="pw" required></div>
+  </div>
+  <label style="margin-top:10px">再输一次密码</label><input type="password" name="pw2" required>
+  <button type="submit" style="margin-top:12px">注册并领取地址</button>
+  <span class="hint" style="margin-left:8px">已有账号？<a href="{esc(base)}/login">去登录</a></span>
+</form>
+<p class="hint">没收到邀请码就别试了 —— 码不对、过期、用过都不行。找维护者要一张。</p>"""
+    return _page("凭邀请码注册", body, base)
 
 
 def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "", who: str = "") -> bytes:
@@ -313,6 +347,77 @@ def page_status(base: str, rec: dict | None, err: str = "", address: str = "") -
     body = (f'<p class="lead">申请号 <code>{esc(rec.get("id"))}</code>　'
             f'姓名 {esc(rec.get("name"))}　申请等级 {esc(rec.get("level_requested"))}</p>{inner}')
     return _page("申请进度", body, base)
+
+
+def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: list[str]) -> str:
+    """邀请码：生成 / 看状态 / 看谁用了 / 停用删除。注册的入口靠它把关。"""
+    rows = INV.list_codes(state_root, wid)
+    s = INV.summary(state_root, wid)
+    boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(l)}"><span>{esc(l)}</span></label>'
+                    for l in levels)
+    out = [f'''<h2>邀请码（同事凭它自助注册）</h2>
+<p class="hint">一码一人、可设有效期：同事在 <code>{esc(base)}/register</code> 填码 + 姓名/部门 +
+自设用户名密码，当场拿到 <b>一条专属地址</b>（给 AI 用）和 <b>一个网页账号</b>。
+谁发的、发给了谁、谁在什么时间什么 IP 用的，全都记在下面这张表里。</p>
+<div class="bar" style="background:transparent;border:0;padding:0;margin:6px 0">
+  <span class="chip c-approved">可用 {s["available"]}</span>
+  <span class="chip c-pending">已用完 {s["used"]}</span>
+  <span class="chip c-unsupported">已过期 {s["expired"]}</span>
+  <span class="chip c-rejected">已停用 {s["disabled"]}</span>
+</div>
+<form method="post" action="{esc(base)}/admin/invite">
+  <input type="hidden" name="k" value="{esc(admin)}">
+  <label style="margin-top:6px">这张码给什么等级（可多选）</label>
+  <div class="lvpick">{boxes}</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+       gap:10px;margin-top:10px">
+    <div><label>码的有效期</label><select name="days">
+      <option value="7">7 天</option><option value="30" selected>30 天</option>
+      <option value="90">90 天</option><option value="0">不过期</option></select></div>
+    <div><label>指定给谁（可选）</label><input name="person" maxlength="40"
+      placeholder="只认本人姓名"></div>
+    <div><label>可用次数</label><input name="max_uses" type="number" value="1" min="1" max="20"></div>
+    <div><label>备注（给谁 / 什么项目）</label><input name="note" maxlength="60"
+      placeholder="如：XX 项目-采购部"></div>
+  </div>
+  <div class="bar" style="background:transparent;border:0;padding:0;margin:12px 0 0">
+    <button type="submit" name="action" value="create">生成邀请码</button>
+    <span class="hint">生成后把「注册链接」发给他，他填码就能自助拿到地址和账号</span>
+  </div>
+</form>''']
+    if not rows:
+        out.append('<p class="hint">还没有生成过邀请码。</p>')
+        return "".join(out)
+    trs = []
+    for r in rows:
+        st = INV.status(r)
+        cls = {"可用": "c-approved", "已用完": "c-pending", "已过期": "c-unsupported"}.get(st, "c-rejected")
+        uses = r.get("uses") or []
+        used = "<br>".join(f'{esc(u.get("person"))}　{esc(INV.fmt(u.get("at")))}'
+                           f'　{esc(u.get("ip"))}' for u in uses) or "—"
+        link = f"{base}/register?c={r['code']}"
+        trs.append(f'''<tr>
+<td><code style="font-size:13px">{esc(r["code"])}</code>
+  <div class="bar" style="background:transparent;border:0;padding:0;margin:4px 0 0">
+    <button type="button" class="tiny ghost" onclick="navigator.clipboard.writeText('{esc(link)}').then(()=>{{this.textContent='已复制'}},()=>{{}})">复制注册链接</button>
+  </div>
+  <span class="hint">可用 {len(uses)}/{int(r.get("max_uses") or 1)} 次</span></td>
+<td>{esc("、".join(r.get("levels") or []))}<br><span class="hint">{esc(r.get("note") or "")}</span></td>
+<td>{esc(r.get("person") or "（不限）")}<br><span class="hint">生成于 {esc(INV.fmt(r.get("created_at")))}</span></td>
+<td><span class="chip {cls}">{esc(st)}</span><br>
+  <span class="hint">{esc(("到期 " + INV.fmt(r["expires"])) if r.get("expires") else "不过期")}</span></td>
+<td><span class="hint">{used}</span></td>
+<td><form method="post" action="{esc(base)}/admin/invite">
+  <input type="hidden" name="k" value="{esc(admin)}">
+  <input type="hidden" name="code" value="{esc(r["code"])}">
+  <button class="tiny" name="action" value="{"revoke" if r.get("enabled", True) else "enable"}">
+    {"停用" if r.get("enabled", True) else "恢复"}</button>
+  <button class="tiny danger" name="action" value="delete"
+    onclick="return confirm(`删掉这张邀请码？已经没人能用它注册了。`)">删除</button>
+</form></td></tr>''')
+    out.append('<div class="wrap"><table><tr><th>邀请码</th><th>等级 / 备注</th><th>给谁 / 生成时间</th>'
+               '<th>状态</th><th>谁用了</th><th>操作</th></tr>' + "".join(trs) + "</table></div>")
+    return "".join(out)
 
 
 def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list[str]) -> str:
@@ -743,6 +848,8 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 <h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>
 {_users_table(state_root, wid, admin, base, levels)}
 
+{_invites_section(base, state_root, wid, admin, levels)}
+
 <h2>直接发一条地址（不经申请）</h2>
 <form method="post" action="{esc(base)}/admin/grant">
   <input type="hidden" name="k" value="{esc(admin)}">
@@ -903,6 +1010,8 @@ class _Portal:
             return True                                   # 链接里带地址令牌或签名
         if sub == "/request" and self.public_request:
             return True
+        if sub == "/register":
+            return True                      # 注册靠邀请码把关，不需要先登录
         return False
 
     def _who_label(self) -> str:
@@ -984,6 +1093,85 @@ class _Portal:
                                                                secure=bool(hdrs.get("cf-connecting-ip")
                                                                            or hdrs.get("x-forwarded-for"))))
 
+    async def _register(self, send, method: str, qs: dict, form: dict, ip: str, hdrs: dict):
+        """凭邀请码自助注册：一次填完 → 发地址 + 建账号 + 自动登录。"""
+        import config as C
+        if method == "GET":
+            code = (qs.get("c") or [""])[0]
+            bound = ""
+            if code:
+                rec, _why = INV.check(self.state_root, self.win.id, code)
+                bound = (rec or {}).get("person") or ""
+            return await self._send(send, page_register(self.base, self.levels, code=code,
+                                                        bound=bound))
+        code = (form.get("code") or "").strip()
+        name = (form.get("name") or "").strip()
+        dept = (form.get("dept") or "").strip()
+        purpose = (form.get("purpose") or "").strip()
+        user = (form.get("user") or "").strip()
+        pw = form.get("pw") or ""
+        pw2 = form.get("pw2") or ""
+
+        def back(msg: str, status: int = 400):
+            return self._send(send, page_register(self.base, self.levels, msg, code=code, bound=name), status)
+
+        rec, why = INV.check(self.state_root, self.win.id, code)
+        if not rec:
+            self.audit("portal_register", {"code": INV.pretty(code), "name": name}, False,
+                       {"reason": why, "ip": ip})
+            return await back(f'<div class="warn">⛔ {esc(why)}</div>')
+        if rec.get("person") and rec["person"] != name:
+            self.audit("portal_register", {"code": rec["code"], "name": name}, False,
+                       {"reason": "码不是给这个人的", "ip": ip})
+            return await back(f'<div class="warn">⛔ 这张邀请码是给「{esc(rec["person"])}」的，'
+                              '请用本人姓名注册。</div>')
+        if not name or not purpose:
+            return await back('<div class="warn">姓名和用途都要填。</div>')
+        if not user or not user.isalnum() or len(user) < 3:
+            return await back('<div class="warn">用户名至少 3 位，只能用字母和数字。</div>')
+        if len(pw) < 8:
+            return await back('<div class="warn">密码至少 8 位。</div>')
+        if pw != pw2:
+            return await back('<div class="warn">两次输入的密码不一样。</div>')
+        if AUTH.get(self.state_root, user):
+            return await back(f'<div class="warn">用户名「{esc(user)}」已经被用了，换一个。</div>')
+        if ACC.get_user(self.state_root, self.win.id, name):
+            return await back(f'<div class="warn">「{esc(name)}」这个同事已经领过地址了；'
+                              '地址忘了或要换，找维护者。</div>')
+        levels = [x for x in (rec.get("levels") or []) if x in self.levels] or [self.levels[0]]
+        # ① 发地址（等级与有效期按邀请码上定的来）
+        left = rec.get("expires")
+        u = ACC.upsert_user(self.state_root, self.win.id, name, levels, dept=dept,
+                            note=f"邀请码注册 {rec['code']}｜{purpose}"[:80],
+                            minutes=int((float(left) - time.time()) / 60) if left else None)
+        # ② 建网页账号（用他自己设的密码）
+        AUTH.set_account(self.state_root, user, role="member", password=pw, person=name)
+        # ③ 登记码的一次使用
+        INV.use(self.state_root, self.win.id, rec["code"], person=name, username=user, ip=ip)
+        KB.append_request(self.state_root, self.win.id, name=name, dept=dept,
+                          purpose=f"[邀请码 {rec['code']}] {purpose}", level_requested=levels[0],
+                          contact="", ip=ip, status="approved", auto=True,
+                          decided_note=f"邀请码 {rec['code']} 自动放行（码由维护者生成）")
+        self.audit("portal_register", {"code": rec["code"], "name": name, "user": user,
+                                       "levels": levels}, True,
+                   {"person": name, "levels": levels, "ip": ip, "user": user,
+                    "ua": hdrs.get("user-agent", "")[:60]})
+        self.audit("kb_invite_use", {"code": rec["code"], "person": name}, True,
+                   {"person": name, "levels": levels, "ip": ip})
+        addr = self._address(u["token"])
+        who = AUTH.get(self.state_root, user)
+        return await self._send(send, _page("注册成功", f'''<div class="ok">
+<b>搞定，{esc(name)}。</b>下面两样都收好：</div>
+<p><b>① 给 AI 助手用的地址</b>（填进 ChatGPT 连接器那种地方）：<br>
+<code>{esc(addr)}</code></p>
+<p><b>② 网页账号</b>：用户名 <code>{esc(user)}</code>，密码就是你刚设的那个 ——
+<a href="{esc(self.base)}/login">点这里登录</a>，登录后能看到/下载你等级内的资料。</p>
+<p class="hint">你的等级：{esc("、".join(levels))}　·　邀请码 {esc(rec["code"])} 已标记为使用
+（维护者能看到是谁在什么时间用的）。忘密码找维护者重置。</p>''', self.base),
+                                200, cookie=AUTH.cookie_header(self.state_root, who, minutes=AUTH.SESSION_MINUTES,
+                                                               secure=bool(hdrs.get("cf-connecting-ip")
+                                                                           or hdrs.get("x-forwarded-for"))))
+
     # ---- 主入口 ----
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -1002,10 +1190,10 @@ class _Portal:
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
-                         "/login", "/logout",
+                         "/login", "/logout", "/register",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
                          "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
-                         "/admin/user", "/admin/pass", "/healthz"}
+                         "/admin/user", "/admin/pass", "/admin/invite", "/healthz"}
         if sub not in portal_routes and not sub.startswith("/dl/"):
             accept = hdrs.get("accept", "")
             if sub in ("", "/") and method == "GET" and "text/html" in accept and "text/event-stream" not in accept:
@@ -1027,7 +1215,7 @@ class _Portal:
                 return {"type": "http.request", "body": bodybuf, "more_body": False}
             receive = replay
         self._sess = self._session(hdrs)
-        if sub in ("/login", "/logout"):
+        if sub in ("/login", "/logout", "/register"):
             lform: dict = {}
             if method == "POST":
                 lbody = b""
@@ -1037,6 +1225,8 @@ class _Portal:
                     lbody += msg.get("body", b"")
                     more = msg.get("more_body", False)
                 lform = {k: v[0] for k, v in parse_qs(lbody.decode(errors="replace")).items()}
+            if sub == "/register":
+                return await self._register(send, method, qs, lform, ip, hdrs)
             return await self._auth_route(send, sub, method, lform, hdrs, qs, ip)
         if not self._sess and not self._has_credential(scope, hdrs, qs, sub, method, bodybuf):
             if sub.startswith("/admin"):
@@ -1545,8 +1735,13 @@ class _Portal:
         tok_hint = (qs.get("k") or [""])[0] or (form.get("k") or "") or hdrs.get("x-admin-token", "")
         ok, why = self._admin_gate(scope, hdrs, {"k": [tok_hint]})
         if not ok:
+            if self._sess and not self._is_admin_session():
+                why = (f"这是管理页面，只有维护者能进。要看资料去 {self.base}/files，"
+                       f"要申请权限去 {self.base}/request。")
+                code = 403
+            else:
+                code = 403 if ("公网" in why or "部署机" in why) else 401
             self.audit("portal_admin", {"path": sub}, False, {"reason": why, "ip": ip})
-            code = 403 if ("公网" in why or "部署机" in why) else 401
             return await self._send(send, _page("管理页无法访问",
                                                 f'<div class="warn">{esc(why)}</div>', self.base), code)
         admin = ensure_admin_token(self.state_root)
@@ -1622,6 +1817,45 @@ class _Portal:
                 msg = f'<div class="ok">已{"恢复" if enabled else "停用"} {esc(person)} 的地址。</div>'
             else:
                 msg = '<div class="warn">找不到这个人。</div>'
+        elif sub == "/admin/invite":
+            act = form.get("action") or "create"
+            code = form.get("code") or ""
+            if act == "create":
+                picked = [x for x in (self._multi.get("levels") or []) if x in self.levels]
+                if not picked:
+                    msg = '<div class="warn">至少勾一个等级 —— 这张码发出去就是给人这一档的权限。</div>'
+                else:
+                    try:
+                        days = int(form.get("days") or 30)
+                        max_uses = int(form.get("max_uses") or 1)
+                    except ValueError:
+                        days, max_uses = 30, 1
+                    rec = INV.create(self.state_root, self.win.id, levels=picked,
+                                     person=form.get("person", ""), note=form.get("note", ""),
+                                     days=days, max_uses=max_uses)
+                    self.audit("kb_invite_create", {"code": rec["code"], "levels": picked,
+                                                    "person": rec.get("person"),
+                                                    "days": days, "max_uses": max_uses}, True,
+                               {"actor": "admin", "ip": ip, "levels": picked})
+                    msg = (f'<div class="ok">✅ 邀请码已生成：<code style="font-size:16px">{esc(rec["code"])}</code>'
+                           f'<br>等级 {"、".join(esc(x) for x in picked)}　·　'
+                           f'{"指定给 " + esc(rec["person"]) + "　·　" if rec.get("person") else ""}'
+                           f'{esc(str(days))} 天内有效　·　可用 {max_uses} 次'
+                           f'<br><span class="hint">把注册链接发给他：</span>'
+                           f'<br><code>{esc(self.base)}/register?c={esc(rec["code"])}</code></div>')
+            elif act in ("revoke", "enable"):
+                done = INV.revoke(self.state_root, self.win.id, code, enabled=(act == "enable"))
+                self.audit("kb_invite_revoke", {"code": INV.pretty(code), "action": act}, done,
+                           {"actor": "admin", "ip": ip})
+                msg = (f'<div class="ok">已{"恢复" if act == "enable" else "停用"} '
+                       f'<code>{esc(INV.pretty(code))}</code>。</div>' if done
+                       else '<div class="warn">没这张码。</div>')
+            else:                                                     # delete
+                done = INV.delete(self.state_root, self.win.id, code)
+                self.audit("kb_invite_delete", {"code": INV.pretty(code)}, done,
+                           {"actor": "admin", "ip": ip})
+                msg = (f'<div class="ok">已删掉 <code>{esc(INV.pretty(code))}</code>。</div>' if done
+                       else '<div class="warn">没这张码。</div>')
         elif sub == "/admin/pass":
             person = (form.get("person") or "").strip()
             act = form.get("action") or "save"
