@@ -176,6 +176,7 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   .btnlabel {{ display: inline-block; padding: 8px 14px; background: #eceef2; border-radius: 9px;
           cursor: pointer; color: var(--ink); font-weight: 500; }}
   .btnlabel:hover {{ background: #e2e5ea; }}
+  .sr {{ position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; z-index: -1; }}
   .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
   .bar {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; background: #f8f9fb;
         border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 0; }}
@@ -416,11 +417,15 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         + '" enctype="multipart/form-data" id="upform">'
         '<input type="hidden" name="k" value="' + esc(admin) + '">'
         '<h3 style="margin-top:0">添加资料（文件 / 整个文件夹 / 拖进来）</h3>'
-        '<div class="drop" id="dz">把文件或文件夹<b>拖到这里</b>　·　'
-        '<label class="btnlabel"><input type="file" name="files" multiple id="f1" hidden>选择文件</label>　'
-        '<label class="btnlabel"><input type="file" name="files" webkitdirectory id="f2" hidden>选择文件夹'
-        '</label>'
-        '<div class="hint" id="uplist" style="margin-top:6px">还没选文件</div></div>'
+        '<div class="drop" id="dz">把文件或<b>整个文件夹拖到这里</b><br>'
+        '<label class="btnlabel" style="margin-top:8px">'
+        '<input class="sr" type="file" name="files" multiple id="f1">选择文件</label>　'
+        '<button class="btnlabel" type="button" id="pickdir">选择文件夹</button>'
+        '<input class="sr" type="file" name="files" webkitdirectory id="f2">'
+        '<div class="hint" id="uplist" style="margin-top:8px">还没选文件</div>'
+        '<div class="hint" style="margin-top:4px">拖文件夹进来最省事；'
+        '万一「选择文件夹」没弹出系统窗口，就把文件夹拖进框里，或用 Finder 放进资料目录再点下面的'
+        '「扫描资料目录」</div></div>'
         '<div class="grid2" style="margin-top:12px">'
         '<div><label>放进哪个分类</label><select name="category">'
         '<option value="">（资料库根目录）</option>' + "".join('<option value="' + esc(c) + '">' + esc(c)
@@ -470,36 +475,105 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
 
     js = """<script>
 (function(){
-  var f1=document.getElementById('f1'), f2=document.getElementById('f2'), dz=document.getElementById('dz'),
-      list=document.getElementById('uplist'), up=document.getElementById('upform');
-  function show(files){
-    if(!files || !files.length){ list.textContent='还没选文件'; return; }
-    var names=[], n=0; for(var i=0;i<files.length;i++){ n++; if(i<3) names.push(files[i].name); }
-    list.textContent='共 '+n+' 个文件：'+names.join('、')+(n>3?' …':'');
+  var UP=document.getElementById('upform'), dz=document.getElementById('dz'),
+      list=document.getElementById('uplist'), f1=document.getElementById('f1'),
+      f2=document.getElementById('f2'), pick=document.getElementById('pickdir');
+  if(!UP) return;
+  var queue=[];                       // [{file, rel}] —— rel 是相对路径（文件夹会带层级）
+  function kb(n){ return n<1024?n+' B':(n<1048576?(n/1024).toFixed(0)+' KB':(n/1048576).toFixed(1)+' MB'); }
+  function render(msg){
+    if(msg){ list.textContent=msg; return; }
+    if(!queue.length){ list.textContent='还没选文件'; return; }
+    var tot=0, names=[]; for(var i=0;i<queue.length;i++){ tot+=queue[i].file.size; if(i<3) names.push(queue[i].rel); }
+    list.textContent='已选 '+queue.length+' 个文件（'+kb(tot)+'）：'+names.join('、')+(queue.length>3?' …':'');
   }
-  if(f1) f1.addEventListener('change', function(){ show(f1.files); });
-  if(f2) f2.addEventListener('change', function(){ show(f2.files); });
-  if(dz && up){
+  function fill(files, useRel){
+    queue=[];
+    for(var i=0;i<(files?files.length:0);i++){
+      var f=files[i];
+      var rel=(useRel && f.webkitRelativePath) ? f.webkitRelativePath : f.name;
+      queue.push({file:f, rel:rel});
+    }
+    render();
+  }
+  if(f1) f1.addEventListener('change', function(){ fill(f1.files, false); });
+  if(f2) f2.addEventListener('change', function(){ fill(f2.files, true); });
+  if(pick) pick.addEventListener('click', async function(e){
+    e.preventDefault();
+    if(!window.showDirectoryPicker){ if(f2) f2.click(); return; }      // 老浏览器退回 webkitdirectory
+    try{
+      var dir=await window.showDirectoryPicker();
+      queue=[]; render('正在读取文件夹…');
+      await walkHandle(dir, '');
+      render();
+    }catch(err){ render('没有选择文件夹（'+(err && err.name || '取消')+'）'); }
+  });
+  async function walkHandle(h, prefix){
+    for await (var kv of h.entries()){
+      var name=kv[0], child=kv[1];
+      if(child.kind==='file'){ queue.push({file: await child.getFile(), rel: prefix+name}); }
+      else if(child.kind==='directory'){ await walkHandle(child, prefix+name+'/'); }
+    }
+  }
+  async function walkEntry(entry, prefix){
+    if(!entry) return;
+    if(entry.isFile){ var f=await new Promise(function(r, j){ entry.file(r, j); });
+      queue.push({file:f, rel:prefix+entry.name}); return; }
+    if(entry.isDirectory){
+      var rd=entry.createReader(), all=[], batch;
+      do{ batch=await new Promise(function(r, j){ rd.readEntries(r, j); });
+          all=all.concat(batch);
+      }while(batch.length);
+      for(var i=0;i<all.length;i++) await walkEntry(all[i], prefix+entry.name+'/');
+    }
+  }
+  if(dz){
     dz.addEventListener('dragover', function(e){ e.preventDefault(); dz.classList.add('hot'); });
     dz.addEventListener('dragleave', function(){ dz.classList.remove('hot'); });
-    dz.addEventListener('drop', function(e){
+    dz.addEventListener('drop', async function(e){
       e.preventDefault(); dz.classList.remove('hot');
       var dt=e.dataTransfer; if(!dt) return;
-      if(dt.items && dt.items.length && f1){ f1.files = dt.files; } else if(f1){ f1.files = dt.files; }
-      show(dt.files);
-      if(f1 && f1.files && f1.files.length){ up.querySelector('button[value=pending]').click(); }
+      queue=[]; render('正在读取…');
+      var items=dt.items, handled=false;
+      if(items && items.length && items[0].webkitGetAsEntry){
+        for(var i=0;i<items.length;i++){
+          var en=items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+          if(en){ handled=true; await walkEntry(en, ''); }
+        }
+      }
+      if(!handled && dt.files && dt.files.length){ fill(dt.files, false); }
+      render();
+      if(queue.length){ var b=UP.querySelector('button[value=pending]'); if(b) b.click(); }
     });
   }
-  var all=document.getElementById('all');
-  function picks(){ return document.querySelectorAll('input.pick'); }
-  function sync(){
-    var n=0, ps=picks(); for(var i=0;i<ps.length;i++) if(ps[i].checked) n++;
-    var c=document.getElementById('cnt'); if(c) c.textContent='已选 '+n+' 篇';
+  UP.addEventListener('submit', function(e){
+    e.preventDefault();
+    if(!queue.length){ render('还没选文件 —— 先拖进来或点「选择文件 / 选择文件夹」'); return; }
+    var after=(e.submitter && e.submitter.value) || 'pending';
+    send(after);
+  });
+  function send(after){
+    var fd=new FormData();
+    fd.append('category', (UP.querySelector('[name=category]')||{}).value || '');
+    fd.append('newcat', (UP.querySelector('[name=newcat]')||{}).value || '');
+    fd.append('level', (UP.querySelector('[name=level]')||{}).value || '');
+    fd.append('after', after);
+    for(var i=0;i<queue.length;i++) fd.append('files', queue[i].file, queue[i].rel);
+    var x=new XMLHttpRequest();
+    x.open('POST', UP.getAttribute('action'));
+    x.upload.onprogress=function(ev){ if(ev.lengthComputable) render('上传中… '+Math.round(ev.loaded/ev.total*100)+'%（'+kb(ev.loaded)+'/'+kb(ev.total)+'）'); };
+    x.onload=function(){ document.open(); document.write(x.responseText); document.close(); };
+    x.onerror=function(){ render('上传失败：网络或隧道中断，请重试'); };
+    render('准备上传…');
+    x.send(fd);
   }
-  if(all) all.addEventListener('change', function(){ var ps=picks();
-    for(var i=0;i<ps.length;i++) ps[i].checked=all.checked; sync(); });
-  document.addEventListener('change', function(e){ if(e.target && e.target.className==='pick') sync(); });
-  sync();
+  window.__kbQueue=function(arr){          // 给自动化测试用的钩子
+    queue=(arr||[]).map(function(x){ return {file:x.file||new File([x.data||'x'], x.name||'a.txt'),
+                                            rel:x.rel||x.name||'a.txt'}; });
+    render();
+  };
+  window.__kbSend=send;
+  render();
 })();
 </script>"""
 
@@ -955,8 +1029,8 @@ class _Portal:
             return await self._send(send, _page("上传未开启", '<div class="warn">本窗口关闭了网页上传'
                                                 '（kb.upload.enabled=false）。可先把文件放进资料目录再点扫描。</div>',
                                                 self.base), 403)
-        max_file = int(ucfg.get("max_file_mb", 100)) * 1024 * 1024
-        max_total = int(ucfg.get("max_total_mb", 300)) * 1024 * 1024
+        max_file = int(ucfg.get("max_file_mb", 200)) * 1024 * 1024
+        max_total = int(ucfg.get("max_total_mb", 1024)) * 1024 * 1024
         docs_rel = C.window_kb_docs_dir(self.cfg)
         docs_dir = (self.win.root / docs_rel).resolve()
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -972,7 +1046,7 @@ class _Portal:
 
         try:
             parser = MultiPartParser(Headers(raw=scope.get("headers", [])), stream(),
-                                     max_files=500, max_fields=50, max_part_size=max_file)
+                                     max_files=2000, max_fields=50, max_part_size=max_file)
             form = await parser.parse()
         except Exception as e:                                                   # noqa: BLE001
             self.audit("kb_upload", {}, False, {"reason": f"{e.__class__.__name__}: {e}",
