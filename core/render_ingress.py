@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import time
@@ -20,7 +19,6 @@ import config as C  # noqa: E402
 
 
 def build(cfg: dict, wins: dict) -> str:
-    yml = Path(cfg["cloudflared_config"]).expanduser()
     lines = [
         f"tunnel: {cfg['tunnel_id']}",
         f"credentials-file: {Path.home() / '.cloudflared' / (cfg['tunnel_id'] + '.json')}",

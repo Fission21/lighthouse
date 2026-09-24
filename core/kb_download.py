@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import io
@@ -72,10 +73,8 @@ def dl_secret(state_root: Path) -> str:
     v = secrets.token_hex(32)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(v + "\n", encoding="utf-8")
-    try:
+    with contextlib.suppress(OSError):      # 文件系统不支持改权限就算了
         p.chmod(0o600)
-    except OSError:
-        pass
     return v
 
 

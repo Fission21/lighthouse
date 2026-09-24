@@ -117,10 +117,10 @@ def render_table(rows: list[dict], header: list[tuple[str, str]]) -> str:
     widths = []
     for key, label in header:
         widths.append(max(_width(label), *(_width(str(r.get(key) or "")) for r in rows)))
-    head = "  ".join(_pad(label, w) for (_, label), w in zip(header, widths))
+    head = "  ".join(_pad(label, w) for (_, label), w in zip(header, widths, strict=False))
     out = [head, "-" * _width(head)]
     for r in rows:
-        out.append("  ".join(_pad(str(r.get(key) or ""), w) for (key, _), w in zip(header, widths)))
+        out.append("  ".join(_pad(str(r.get(key) or ""), w) for (key, _), w in zip(header, widths, strict=False)))
     return "\n".join(out)
 
 

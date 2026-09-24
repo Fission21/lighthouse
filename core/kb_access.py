@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import secrets
 import time
@@ -153,10 +154,8 @@ def touch(state_root: Path, wid: str, person: str, *, denied: bool = False) -> N
     rec["calls"] = int(rec.get("calls") or 0) + 1
     if denied:
         rec["denied"] = int(rec.get("denied") or 0) + 1
-    try:
+    with contextlib.suppress(OSError):      # 记不上就算了：调用已经发生，别把工具调用搞挂
         save_all(state_root, data)
-    except OSError:
-        pass
 
 
 def describe_expiry(rec: dict) -> str:

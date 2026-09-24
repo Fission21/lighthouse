@@ -65,7 +65,7 @@ def ask_scope() -> list[str]:
             choice = input("选择 [1-5]（默认 1）: ").strip() or "1"
         except EOFError:
             print("❌ 非交互环境：请显式给 --preset docs|docs+code|all|none 或 --include \"...\"")
-            raise SystemExit(2)
+            raise SystemExit(2) from None
         if choice in ("1", "2", "3", "4"):
             key = {"1": "docs", "2": "docs+code", "3": "all", "4": "none"}[choice]
             return list(PRESETS[key])
@@ -73,7 +73,7 @@ def ask_scope() -> list[str]:
             try:
                 raw = input("范围（逗号分隔的 glob，例如 src/**,*.py）: ").strip()
             except EOFError:
-                raise SystemExit(2)
+                raise SystemExit(2) from None
             got = [x.strip() for x in raw.split(",") if x.strip()]
             if got:
                 return got
@@ -132,7 +132,7 @@ def main() -> int:
     print(f"  项目根目录 : {root}")
     print(f"  能看的     : {include or '（什么都不给看，之后可按需申请提权）'}")
     print(f"  不给看的   : {exclude}")
-    print(f"  永远看不到 : .env / 私钥 / 凭据 / 数据库 等密钥类文件（默认拉黑，不可关）")
+    print("  永远看不到 : .env / 私钥 / 凭据 / 数据库 等密钥类文件（默认拉黑，不可关）")
     print(f"  范围来源   : {src}")
     print(f"  写权限     : {'登记为永久只读' if a.no_write else '登记为可用（运行时开关默认关着，需要你手动开）'}")
     print(f"  对外发布   : {'可发公网（--public）' if a.public else '仅本机（local；要对外需改 visibility）'}")

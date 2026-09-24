@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import kb as KB          # 台账读写（kb.py 不反向依赖本模块，无循环）
+import kb as KB  # 台账读写（kb.py 不反向依赖本模块，无循环）
 
 SUPPORTED_TEXT = {".md", ".txt", ".markdown"}
 SUPPORTED_TEXTUTIL = {".docx", ".doc", ".rtf", ".odt", ".html", ".htm"}

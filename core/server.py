@@ -74,9 +74,12 @@ SWITCH_PATH = STATE_ROOT / "state" / "window-write.json"
 CLI_HINT = os.environ.get("LIGHTHOUSE_CLI", "bash lighthouse.sh")
 
 import sys as _sys
+
 _sys.path.insert(0, str(HERE))
 import scope as SCOPE  # noqa: E402  （范围授权：grant / pending / arm / ceiling）
+
 import config as CONF  # noqa: E402  （窗口提权策略：auto_grant / elevation_ceiling）
+
 CST = timezone(timedelta(hours=8))
 
 # ---------------------------------------------------------------- 默认拉黑（路径级）
@@ -230,10 +233,9 @@ class Window:
             if pat.search(rel):
                 return True
         parts = rel.split("/")
-        for i in range(1, len(parts) + 1):
-            if any(p.match("/".join(parts[:i])) for p in self.exclude):
-                return True
-        return False
+        # 任一层前缀命中排除规则就拒（"a/b" 命中 exclude 时 "a/b/c" 也不给看）
+        return any(any(p.match("/".join(parts[:i])) for p in self.exclude)
+                   for i in range(1, len(parts) + 1))
 
     def has_visible_under(self, rel: str) -> bool:
         """`rel` 这棵子树里有没有**任何**能给看的文件（只看有没有，不返回内容）。"""
@@ -488,13 +490,12 @@ def window_info() -> str:
 
 def list_files(path: str = "", depth: int = 3) -> str:
     ok, why = WIN.check(path)
-    if not ok:
-        # 目录本身不匹配 include ≠ 不能列：只要它**下面**有能给看的文件就算数。
-        # 否则 `include: ["**/*.py"]` 这类「按类型给看」的配置下，agent 永远发现不了文件。
-        # （只判「有没有」，不返回内容；真正列出来的每一项仍会逐个过闸。）
-        if not WIN.has_visible_under(path):
-            _audit("list_files", {"path": path}, False, {"reason": why})
-            return _dump({"error": why, "window": WIN.id})
+    # 目录本身不匹配 include ≠ 不能列：只要它**下面**有能给看的文件就算数。
+    # 否则 `include: ["**/*.py"]` 这类「按类型给看」的配置下，agent 永远发现不了文件。
+    # （只判「有没有」，不返回内容；真正列出来的每一项仍会逐个过闸。）
+    if not ok and not WIN.has_visible_under(path):
+        _audit("list_files", {"path": path}, False, {"reason": why})
+        return _dump({"error": why, "window": WIN.id})
     target, err = WIN.resolve(path)
     if err or target is None:
         _audit("list_files", {"path": path}, False, {"reason": err})
@@ -688,7 +689,7 @@ def request_access(include: list[str], reason: str = "", user_confirmed: bool = 
         else:
             why = "本窗口未开启「对话内授权」（user_confirmed 需要用户先在部署机开启该策略）"
 
-    pending = SCOPE.set_pending(WIN.id, clean, reason)
+    SCOPE.set_pending(WIN.id, clean, reason)
     _audit("request_access", {"include": clean, "reason": reason}, True, {"pending": True, "note": why})
     chat_hint = ("\n（本窗口已开启「对话内授权」：用户若已在对话里明确同意，可再次调用 "
                  "request_access(include=..., reason=..., user_confirmed=true) 即时生效）"
@@ -842,8 +843,8 @@ def delete_file(path: str, confirm: bool = False) -> str:
 # kb 模式：只开放 kb_*（不看路径，只看编号 + 等级）；路径型工具**根本不注册** ——
 # 外部 AI 连工具名都看不到，比「注册了再拒绝」少一个洞。写工具保持原样（会被写开关挡住）。
 if KB_MODE:
-    import kb as KB                                              # noqa: N813
-    import kb_access as KBACCESS                                  # noqa: N813
+    import kb as KB  # noqa: N813
+    import kb_access as KBACCESS  # noqa: N813
     KB.register_tools(server, WIN, STATE_ROOT, _audit, _dump, _redact,
                       levels_getter=LEVELS.get, principal_getter=PRINCIPAL.get)
 else:

@@ -16,14 +16,14 @@
 """
 from __future__ import annotations
 
-import kb_download as DL      # 下载层：门户下载页 + 限时签名链接
-
 import hashlib
 import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import kb_download as DL  # 下载层：门户下载页 + 限时签名链接
 
 CST = timezone(timedelta(hours=8))
 STATUSES = ("pending", "approved", "rejected", "unsupported")
