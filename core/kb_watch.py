@@ -50,6 +50,26 @@ def write_offset(state_file: Path, n: int) -> None:
 _ACTIONS = {"kb_download": "下载", "kb_bundle": "打包下载", "kb_link": "要了限时链接"}
 
 
+def offset_file(state_root: Path, wid: str) -> Path:
+    """默认的 offset 文件 —— 网页横幅和 CLI 必须看同一个，否则一边「已读」另一边还报。"""
+    return Path(state_root) / "state" / f"kb-watch-{wid}.offset"
+
+
+def unread(state_root: Path, wid: str, levels: list[str], state_file: Path | None = None,
+           limit: int = 20) -> list[dict]:
+    """还没被「知道了」过的敏感下载（只看不动 offset，给网页横幅用）。"""
+    return watch(state_root, wid, levels, state_file or offset_file(state_root, wid),
+                 peek=True, limit=limit)
+
+
+def ack(state_root: Path, wid: str, state_file: Path | None = None) -> int:
+    """把「看过了」记下来（offset 推到当前审计末尾），返回推到了第几行。"""
+    p = state_file or offset_file(state_root, wid)
+    n = len(audit_lines(state_root, wid))
+    write_offset(p, n)
+    return n
+
+
 def _level_map(state_root: Path, wid: str) -> dict[str, dict]:
     cat, _err = KB.load_catalog(state_root, wid)
     return dict((cat or {}).get("docs") or {})

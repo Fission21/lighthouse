@@ -1232,6 +1232,7 @@ def part_nav(state: Path, env: dict, site: str):
     """大库导航（排序 / 筛文件夹 / 最近动态）与「核心资料被人下载就报一声」。"""
     print("\n⑮ 大库导航：点表头排序 · 筛文件夹 · 最近动态　＋　敏感下载守望")
     import kb as KB
+    import kb_access as ACC
     import kb_watch as W
     import kb_web as WEB
 
@@ -1324,9 +1325,33 @@ def part_nav(state: Path, env: dict, site: str):
           len(one) >= 1 and [r["ts"] for r in one] == [r["ts"] for r in two]
           and off.read_text().strip() == "0", f"{len(one)} 条 / offset={off.read_text().strip()}")
 
+    # ---- 管理页上的提醒（用户 2026-09-24 定：不推 Telegram，就在管理页提醒）----
+    did3 = did_core
+    W.ack(state, "kb1")                       # 先归零，免得前面合成的记录干扰
+    row("kb_download", did3, who="李四")
+    st, body = http(f"{base}/admin?k={admin}")
+    check("管理页出现提醒条：有几次最高等级资料被拿走",
+          st == 200 and "次最高等级的资料被拿走" in body and "知道了" in body
+          and "李四" in body, body[body.find("被拿走") - 40: body.find("被拿走") + 60] if "被拿走" in body else "没有提醒条")
+    check("提醒条里能直接看到是谁、哪篇", "李四" in body and "看明细" in body)
+    st, body2 = http(f"{base}/admin/people?k={admin}")
+    check("提醒条在每个管理页都在（不会只在资料页）", "次最高等级的资料被拿走" in body2)
+    st, body3 = http(f"{base}/files?t={ACC.get_user(state, 'kb1', '张三')['token']}")
+    check("同事那边看不到这条提醒（只管给维护者看）", "最高等级的资料被拿走" not in body3)
+    st, body4 = http(f"{base}/admin/dlack", data={"k": admin, "back": "docs"})
+    check("点「知道了」→ 标为已读", "已标记看过" in body4)
+    st, body5 = http(f"{base}/admin?k={admin}")
+    check("看过之后提醒条消失（不再重复吵）", "最高等级的资料被拿走" not in body5)
+    check("再有一次新的下载 → 又提醒（同一本账）",
+          (row("kb_download", did3, who="王五") or True)
+          and "次最高等级的资料被拿走" in http(f"{base}/admin?k={admin}")[1])
+    W.ack(state, "kb1")
+
     # CLI 子命令（跟 cron 用的是同一条）
-    out, code = cli("kb", "watch-downloads", "kb1", "--levels", "L3-核心", "--peek", env=env)
-    check("CLI：kb watch-downloads 能跑（--peek 只读）", code == 0 and "⚠️" in out, out[-160:])
+    out, code = cli("kb", "watch-downloads", "kb1", "--levels", "L3-核心",
+                    "--state", str(off), "--peek", env=env)
+    check("CLI：kb watch-downloads 能跑（--peek 只读，同一个 offset 口径）",
+          code == 0 and "⚠️" in out, out[-160:])
 
 
 # ---------------------------------------------------------------- ⑨ 同事管理：改等级与其它

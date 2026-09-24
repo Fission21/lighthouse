@@ -35,6 +35,7 @@ import kb_folder as FOLD
 import kb_ingest as ING
 import kb_invite as INV
 import kb_usage as USAGE
+import kb_watch as WATCH
 import theme as THEME
 
 CST = timezone(timedelta(hours=8))
@@ -135,6 +136,14 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
   nav a {{ color: var(--ink); text-decoration: none; background: var(--card); border: 1px solid var(--line);
           padding: 5px var(--s3); border-radius: var(--r4); }}
   nav a:hover {{ border-color: var(--accent); color: var(--accent); }}
+  /* 提醒条：最高等级资料被拿走时出现（不是报错，所以用暖色不用红） */
+  .alert {{ background: var(--warn_b); border-left: 3px solid var(--warn); border-radius: var(--r2);
+            padding: var(--s3) var(--s4); margin: var(--s3) 0; }}
+  .alert b {{ color: var(--warn); }}
+  .alert .ahead {{ display: flex; align-items: baseline; gap: var(--s3); }}
+  .alert .ahead form.inline {{ margin-left: auto; }}
+  .alert .hint {{ color: inherit; opacity: .82; }}      /* 黄底上灰字对比太弱，跟着正文走 */
+  .alert form.inline {{ display: inline; }}
   .card, form {{ background: var(--card); border: 0; border-radius: var(--r3);
           padding: var(--s4); margin: 0 0 var(--s4); box-shadow: var(--sh1); }}
   form.inline {{ display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s3); }}
@@ -1296,11 +1305,12 @@ _SECTION_OF_SUB = {
     "/admin/title": "docs", "/admin/trash": "docs",
     "/admin/decide": "people", "/admin/grant": "people", "/admin/revoke": "people",
     "/admin/pass": "people", "/admin/user": "people", "/admin/rotate": "people",
-    "/admin/invite": "invites",
+    "/admin/invite": "invites", "/admin/dlack": "docs",
 }
 
 
-def _admin_tabs(base: str, admin: str, section: str, n_pen: int, n_users: int, n_codes: int) -> str:
+def _admin_tabs(base: str, admin: str, section: str, n_pen: int, n_users: int, n_codes: int,
+                n_alert: int = 0) -> str:
     """管理页顶部只放几个页签：一页一件事，别把什么都堆在一起。"""
     items = [("docs", "/admin", "资料"),
              ("people", "/admin/people", f"人员（待批 {n_pen} · 同事 {n_users}）"),
@@ -1309,7 +1319,7 @@ def _admin_tabs(base: str, admin: str, section: str, n_pen: int, n_users: int, n
     out = []
     for key, path, label in items:
         cls = ' class="on"' if key == section else ""
-        out.append(f'<a{cls} href="{esc(base)}{path}?k={esc(admin)}">{esc(label)}</a>')
+        out.append(f'<a{cls} href="{esc(base)}{path}?k={esc(admin)}">{label}</a>')
     return '<nav class="tabs">' + "".join(out) + "</nav>"
 
 
@@ -1373,11 +1383,44 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 </form>""")
     invites_html = _invites_section(base, state_root, wid, admin, levels, pub)
     section_html = {"docs": docs_html, "people": people_html, "invites": invites_html}.get(section, docs_html)
+    # 有人把「最高一档」的资料下载 / 打包 / 要了链接 —— 就在这儿提醒，不往外推消息。
+    # 看住哪一档跟 `kb watch-downloads` 默认一致（最高一档），「知道了」按同一个 offset 记账。
+    try:
+        _alert = WATCH.unread(state_root, wid, [levels[-1]] if levels else [])
+    except Exception:                                  # noqa: BLE001  横幅坏了不能拖垮管理页
+        _alert = []
+    alert = ""
+    if _alert:
+        arows = "".join(
+            '<tr><td class="nowrap">' + esc(r["ts"]) + "</td><td>" + esc(r["who"]) + "</td><td>"
+            + esc(r["action"]) + "</td><td>" + esc("、".join(
+                f"{d['title']}（{d['level']}）" for d in r["docs"])) + "</td><td class=\"nowrap\">"
+            + esc(r["ip"]) + "</td></tr>" for r in reversed(_alert))
+        last = _alert[-1]
+        alert = (
+            '<div class="alert"><div class="ahead"><b>⚠️ 有 ' + str(len(_alert))
+            + ' 次最高等级的资料被拿走</b>'
+            '<form class="inline" method="post" action="' + esc(base) + '/admin/dlack">'
+            '<input type="hidden" name="k" value="' + esc(admin) + '">'
+            '<input type="hidden" name="back" value="' + esc(section) + '">'
+            '<button class="tiny ghost" type="submit" title="标记已看过；之后再有新的才会再提醒">'
+            '知道了</button></form></div>'
+            '<div class="hint">最新：' + esc(last["ts"]) + " · " + esc(last["who"]) + " · "
+            + esc("、".join(d["title"] for d in last["docs"])) + "</div>"
+            '<details class="adv"><summary title="每一次的时间 / 谁 / 做了什么 / 哪篇 / 来源">看明细</summary>'
+            '<table class="ftable rtable" style="margin-top:10px"><tr>'
+            '<th style="width:132px">时间</th><th style="width:104px">谁</th>'
+            '<th style="width:96px">做了什么</th><th>哪篇</th><th style="width:130px">来源</th></tr>'
+            + arows + "</table>"
+            '<p style="margin:8px 0 0"><a class="hint" href="' + esc(base) + "/admin/usage?k="
+            + esc(admin) + '">去用量页看全部记录</a></p></details></div>')
+
     tabs = _admin_tabs(base, admin, section, len(pend), len(ACC.list_users(state_root, wid)),
-                       len(INV.list_codes(state_root, wid)))
+                       len(INV.list_codes(state_root, wid)), len(_alert))
     body = f"""{msg}
 <p class="lead">{esc(_now())}<span class="q" title="{'公网可访问，请勿把本页地址转发给别人' if remote else '仅部署机本机可访问'}">?</span></p>
 {tabs}
+{alert}
 
 {section_html}"""
     return _page("资料库管理页", body, base, admin=admin, wide=True, who=who)
@@ -1761,7 +1804,7 @@ class _Portal:
                          "/admin/usage", "/files", "/zip",
                          "/login", "/logout", "/register", "/admin/login",
                          "/admin/mkdir", "/admin/rmdir", "/admin/move",
-                         "/admin/flevel", "/admin/trash",
+                         "/admin/flevel", "/admin/trash", "/admin/dlack",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
                          "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
                          "/admin/user", "/admin/pass", "/admin/invite", "/healthz"}
@@ -2750,6 +2793,12 @@ class _Portal:
                            '<br><span class="hint">只影响以后新进来的文件；已经入库的不会变。</span></div>')
             qs = dict(qs)
             qs["dir"] = [cur]
+
+        if sub == "/admin/dlack":                     # 「知道了」：把敏感下载提醒标为已读
+            n = WATCH.ack(self.state_root, self.win.id)
+            self.audit("kb_dl_ack", {"to": n}, True, {"actor": "admin", "ip": ip})
+            msg = ('<div class="ok">✅ 已标记看过 —— 之后再有新的最高等级资料被拿走才会再提醒'
+                   '（命令行 kb watch-downloads 记的是同一本账）。</div>')
 
         if sub == "/admin/trash":
             docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"

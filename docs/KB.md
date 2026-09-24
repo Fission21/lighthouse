@@ -391,7 +391,11 @@ bash lighthouse.sh kb notify bidkb --json     # 机器可读
 bash lighthouse.sh kb notify bidkb --ack      # 汇报完打标，避免重复提醒
 ```
 
-核心资料被人拿走，也可以让它盯：
+**默认就是管理页上的提醒**（不需要配任何东西）：有人把最高一档的资料下载 / 打包 / 要了限时链接，
+管理页每个页面顶部会冒出一条提醒条 —— 几次、最新一条是谁、哪篇，点开看全部；页签上带角标「资料 ⚠️N」。
+点「知道了」标为已读，之后再有新的才再提醒。同事侧看不到这条提醒。
+
+要挂到命令行 / 定时任务也行（同一本 offset 账）：
 
 ```bash
 bash lighthouse.sh kb watch-downloads bidkb                     # 只看新的（没有就不输出）
