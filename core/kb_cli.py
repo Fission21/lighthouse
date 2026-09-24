@@ -171,59 +171,19 @@ def cmd_scan(a) -> int:
     if not docs_dir.is_dir():
         print(f"❌ 资料目录不存在: {docs_dir}")
         return 1
-    files = _walk_docs(cfg, root)
-    if not files:
+    res = ING.scan_library(state, a.window, root, C.window_kb_docs_dir(cfg), a.extract,
+                            default_level=C.window_kb_default_level(cfg))
+    if not res["total"]:
         print(f"（{docs_dir} 里没有文件）")
         return 0
-    new = changed = same = skipped = failed = 0
-    rows = []
-    for f in files:
-        rel = str(f.relative_to(root))
-        did = KB.doc_id(rel)
-        cat = C.window_kb_default_level(cfg)
-        cat_name = f.parent.name if f.parent != docs_dir else ""
-        if f.suffix.lower() not in ING.supported_exts():
-            KB.upsert_doc(state, a.window, rel=rel, category=cat_name, level=cat, status="unsupported",
-                          note=f"暂不支持的类型 {f.suffix}（需人工转成 .md/.txt）", keep_status=False)
-            _unsupported_flag(state, a.window, rel)
-            skipped += 1
-            rows.append(("⏭", rel, "类型不支持"))
-            continue
-        sha = KB.sha256_file(f)
-        old = (KB.load_catalog(state, a.window)[0].get("docs") or {}).get(did) or {}
-        if old.get("sha256") == sha and old.get("text"):
-            same += 1
-            continue
-        text, err = ING.extract(f, a.extract)
-        if err or not text:
-            KB.upsert_doc(state, a.window, rel=rel, category=cat_name, level=cat, status="pending",
-                          sha=sha, note=f"抽取失败：{err}", keep_status=False)
-            failed += 1
-            rows.append(("⛔", rel, err or "抽取为空"))
-            continue
-        tp = KB.kb_root(state, a.window) / "text" / f"{did}.md"
-        tp.parent.mkdir(parents=True, exist_ok=True)
-        tp.write_text(text, encoding="utf-8")
-        was_approved = old.get("status") == "approved"
-        KB.upsert_doc(state, a.window, rel=rel, category=cat_name, level=old.get("level") or cat,
-                      text_rel=f"text/{did}.md", chars=len(text), sha=sha,
-                      text_sha=KB.sha256_file(tp), status="pending",
-                      note=("原文件内容已变更 → 审批失效，需重新审批" if was_approved else ""),
-                      keep_status=False)
-        if old:
-            changed += 1
-            rows.append(("🔄", rel, f"{len(text)} 字符（内容变了，已退回待批）"))
-        else:
-            new += 1
-            rows.append(("✅", rel, f"{len(text)} 字符"))
-    _audit(state, a.window, "kb_scan",
-           {"extract": a.extract}, True,
-           {"new": new, "changed": changed, "same": same, "skipped": skipped, "failed": failed})
+    _audit(state, a.window, "kb_scan", {"extract": a.extract}, True,
+           {"new": res["new"], "changed": res["changed"], "same": res["same"],
+            "skipped": res["skipped"], "failed": res["failed"]})
     print(f"扫描 {docs_dir}")
-    for mark, rel, note in rows[:40]:
+    for mark, rel, note in res["rows"][:40]:
         print(f"  {mark} {rel}  — {note}")
-    print(f"\n新增待批 {new} 篇 · 内容变化退回待批 {changed} 篇 · 未变 {same} 篇 · "
-          f"跳过 {skipped} 篇 · 失败 {failed} 篇")
+    print(f"\n新增待批 {res['new']} 篇 · 内容变化退回待批 {res['changed']} 篇 · 未变 {res['same']} 篇 · "
+          f"跳过 {res['skipped']} 篇 · 失败 {res['failed']} 篇")
     print(f"台账: {KB.catalog_path(state, a.window)}")
     print(f"\n下一步：{CLI} kb pending {a.window}   →   {CLI} kb approve {a.window} --all-pending --level <等级>")
     return 0
@@ -556,7 +516,12 @@ def cmd_usage(a) -> int:
 
 def cmd_admin_url(a) -> int:
     cfg, _root, state = _win(a.window)
-    tok = WEB.ensure_admin_token(state)
+    if getattr(a, "rotate", False):
+        tok = WEB.rotate_admin_token(state)
+        _audit(state, a.window, "kb_admin_rotate", {}, True, {"note": "管理令已轮换，旧链接立即失效"})
+        print("⚠️ 管理令已换成新的，之前那条管理页链接立刻失效。")
+    else:
+        tok = WEB.ensure_admin_token(state)
     base = _public_url(cfg, a.window)
     print("管理页（本机浏览器直接打开；可从手机访问时请保管好这条带管理令的地址）：")
     print(f"  {base}/admin?k={tok}")
@@ -588,7 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)
-    p = sub.add_parser("admin-url"); p.add_argument("window"); p.set_defaults(fn=cmd_admin_url)
+    p = sub.add_parser("admin-url"); p.add_argument("window"); p.add_argument("--rotate", action="store_true"); p.set_defaults(fn=cmd_admin_url)
     return ap
 
 

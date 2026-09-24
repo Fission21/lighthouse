@@ -579,6 +579,128 @@ def part_download(site: str, state: Path, zhang: dict, lib_root: str):
     return link_test
 
 
+# ---------------------------------------------------------------- ⑦ 管理页管文件（主人要的网页操作）
+async def part_admin(site: str, state: Path, lib: Path, zhang: dict):
+    print("\n⑦ 管理页直接管文件：扫库 / 公开 / 改等级 / 下架 / 预览 / 一次全公开")
+    import kb as KB
+    import kb_web as WEB
+
+    base = site + "/w-kb1-test"
+    admin = WEB.ensure_admin_token(state)
+    docs = lib / "原始文档"
+    (docs / "技术").mkdir(parents=True, exist_ok=True)
+
+    # 没有管理令 → 打不开
+    st, body = http(f"{base}/admin")
+    check("管理页没有管理令 → 401", st == 401, str(st))
+
+    # 先放两个新文件（一个正常、一个类型不支持）
+    (docs / "技术" / "网页管理自检.md").write_text(
+        "# 网页管理自检\n\n这段文字用来验证：从管理页公开之后，同事立刻能读到。\n", encoding="utf-8")
+    (docs / "技术" / "表格自检.xlsx").write_bytes(b"PK\x03\x04 not-a-real-xlsx")
+
+    st, body = http(f"{base}/admin?k={admin}")
+    check("带管理令打开管理页 → 200，且页面上有「资料」一节",
+          st == 200 and "资料（" in body and "扫描资料目录" in body, str(st))
+    check("页面上有资料目录路径", "原始文档" in body)
+
+    # ① 扫库
+    st, body = http(f"{base}/admin/scan", data={"k": admin, "action": "scan"})
+    check("管理页点「扫描资料目录」→ 新增待批 1 篇", st == 200 and "新增待批 1" in body, str(st))
+    check("类型不支持的被标出来（.xlsx）", "类型不支持" in body or "需人工转文本" in body)
+
+    did_new = KB.doc_id("原始文档/技术/网页管理自检.md")
+    did_xlsx = KB.doc_id("原始文档/技术/表格自检.xlsx")
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("新文件进了台账且状态=pending", (cat["docs"].get(did_new) or {}).get("status") == "pending")
+    check("默认等级来自窗口配置（L1-商务）", (cat["docs"].get(did_new) or {}).get("level") == "L1-商务",
+          str((cat["docs"].get(did_new) or {}).get("level")))
+    check("不支持的篇目状态=unsupported（且打了标记）",
+          (cat["docs"].get(did_xlsx) or {}).get("status") == "unsupported")
+
+    # 待批的内容，同事还读不到
+    async def before(session):
+        r = await call(session, "kb_read", {"doc_id": did_new})
+        check("公开之前同事读不到（即便已入库）", "尚未公开" in str(r), str(r)[:80])
+    await with_session(f"{site}/kb-{zhang['token']}", before)
+
+    # ② 从管理页公开（当场选等级）
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_new,
+                                               "action": "approve", "level": "L2-技术"})
+    check("管理页点「公开」→ 当场生效", st == 200 and "已公开" in body and "L2-技术" in body, str(st)[:120])
+
+    async def after(session):
+        r = await call(session, "kb_read", {"doc_id": did_new})
+        check("公开后同事立刻能读到（网页操作 = CLI 同等效力）", "网页管理自检" in str(r), str(r)[:80])
+    await with_session(f"{site}/kb-{zhang['token']}", after)
+
+    # ③ 改等级（同事的地址没变，权限跟着变）
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_new,
+                                               "action": "setlevel", "level": "L3-核心"})
+    check("管理页「改等级」→ 200", st == 200 and "等级已改成" in body, str(st)[:120])
+
+    async def after2(session):
+        r = await call(session, "kb_read", {"doc_id": did_new})
+        check("改成 L3 后，只有 L2 的同事又读不到了", "无权访问" in str(r), str(r)[:80])
+    await with_session(f"{site}/kb-{zhang['token']}", after2)
+
+    # ④ 管理令可以直接预览原件（不占同事的地址）
+    st, blob, _ = http_bytes(f"{base}/dl/{did_new}?k={admin}")
+    check("管理页「看原件」→ 维护者能直接下到（等级不挡自己）",
+          st == 200 and "网页管理自检" in blob.decode("utf-8", "replace"), str(st))
+
+    # ⑤ 不支持的篇目：批准会被拒
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_xlsx,
+                                               "action": "approve", "level": "L2-技术"})
+    check("类型不支持的篇目 → 管理页也拒绝公开", st == 200 and "不能这么做" in body, str(body)[:140])
+
+    # ⑥ 等级不在白名单
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_new,
+                                               "action": "approve", "level": "L9-不存在"})
+    check("乱传等级 → 被白名单拦住", "不在本窗允许清单" in body)
+
+    # ⑦ 下架（回到待批，同事立刻失去）
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_new, "action": "setlevel",
+                                               "level": "L2-技术"})
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_new, "action": "revoke"})
+    check("管理页「下架」→ 200", st == 200 and "已下架" in body, str(st)[:120])
+
+    async def after3(session):
+        r = await call(session, "kb_read", {"doc_id": did_new})
+        check("下架后同事立刻读不到", "尚未公开" in str(r), str(r)[:80])
+    await with_session(f"{site}/kb-{zhang['token']}", after3)
+
+    # ⑧ 一次公开全部待批
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "action": "approve_all", "level": "L1-商务"})
+    cat2, _ = KB.load_catalog(state, "kb1")
+    check("「一律公开」把待批的都公开（等级一次定）",
+          st == 200 and "已公开 1 篇" in body
+          and (cat2["docs"].get(did_new) or {}).get("status") == "approved"
+          and (cat2["docs"].get(did_new) or {}).get("level") == "L1-商务", str(body)[:140])
+    check("不支持的篇目不会被顺手公开（仍在 unsupported）",
+          (cat2["docs"].get(did_xlsx) or {}).get("status") == "unsupported")
+
+    # ⑨ 从台账删掉（文件不动）
+    st, body = http(f"{base}/admin/doc", data={"k": admin, "did": did_xlsx, "action": "forget"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("「从台账删掉」→ 台账里没有它了（文件还在磁盘上）",
+          st == 200 and did_xlsx not in (cat.get("docs") or {}) and (docs / "技术" / "表格自检.xlsx").is_file())
+
+    # ⑩ 管理页上的操作都留痕（actor=admin）
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    for tool in ("kb_scan", "kb_approve", "kb_setlevel", "kb_revoke", "kb_forget"):
+        hit = [r for r in rows if r.get("tool") == tool and r.get("actor") == "admin"]
+        check(f"审计留痕：{tool}（actor=admin）", bool(hit), f"{len(rows)} 条记录")
+    prev = [r for r in rows if r.get("tool") == "kb_download" and r.get("admin")]
+    check("维护者预览原件也留痕（principal=维护者(管理令)）",
+          bool(prev) and prev[-1].get("principal") == "维护者(管理令)",
+          str(prev[-1].get("principal")) if prev else "没有预览记录")
+
+    # 清理自检文件
+    (docs / "技术" / "网页管理自检.md").unlink(missing_ok=True)
+    (docs / "技术" / "表格自检.xlsx").unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
@@ -608,6 +730,7 @@ async def main() -> int:
         site = base_url.replace("/w-kb1-test", "")
         link_test = part_download(site, state, zhang, str(lib))
         await with_session(f"{site}/kb-{zhang['token']}", link_test)
+        await part_admin(site, state, lib, zhang)
         part_track(state, env, zhang)
     finally:
         srv.terminate()

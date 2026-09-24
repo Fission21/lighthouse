@@ -37,7 +37,10 @@ Lighthouse（灯塔）：把本地目录通过 MCP 协议安全地开给外部 A
 4. **一人一条地址**：令牌是 URL 的一部分（网页版 AI 只能填 URL，没有自定义 header 输入框），
    改权限不换地址、`rotate` 才换；管理令 `adm_` 前缀与同事地址互不通用。
 
-5. **下载与在线阅读共用同一道闸门**：门户下载页、单篇下载、打包、`kb_link` 全都先过
+5. **管理页的每个写操作都走台账层**（`kb.scan_library` / `kb.set_status` / `kb.save_catalog`），
+   不许在网页层直接改 JSON；管理页只认管理令（`?k=`），且默认只允许部署机直连。
+
+6. **下载与在线阅读共用同一道闸门**：门户下载页、单篇下载、打包、`kb_link` 全都先过
    `kb.resolve_doc`（审批 + 等级 + 拉黑 + 哈希 + 越界）；签名链接必须**验签**（绑定篇号+人+到期），
    且签名只绑一篇 —— 不能拿签名链接去列清单或打包。
 
@@ -86,4 +89,5 @@ bash tests/run_all_tests.sh      # 五套：冒烟 13 / 只读审计 46 / 写开
 | `core/kb_ingest.py` | 抽文本（MinerU → pdftext / textutil），失败**不许**标成可读 |
 | `core/kb_cli.py` | `lighthouse.sh kb` 的实现（台账 / 地址 / 申请 / 用量） |
 | `core/kb_download.py` | 下载层：门户下载页数据、限时签名链接（HMAC）、zip 打包 |
+| `core/kb_ingest.py` | 抽取（textutil/MinerU/pdftotext）+ `scan_library()` 扫库（CLI 与网页共用） |
 | `tests/*` | 五套测试（冒烟 / 只读审计 / 写开关 / 提权 / 加固）+ 一键验收 |

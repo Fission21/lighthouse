@@ -18,6 +18,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import kb as KB          # 台账读写（kb.py 不反向依赖本模块，无循环）
+
 SUPPORTED_TEXT = {".md", ".txt", ".markdown"}
 SUPPORTED_TEXTUTIL = {".docx", ".doc", ".rtf", ".odt", ".html", ".htm"}
 SUPPORTED_PDF = {".pdf"}
@@ -131,3 +133,79 @@ if __name__ == "__main__":
     for arg in sys.argv[1:]:
         t, e = extract(Path(arg))
         print(f"{arg}: {'✅ ' + str(len(t)) + ' 字符' if t else '⛔ ' + e}")
+
+
+# --------------------------------------------------------------------------- 扫库（CLI 与网页端共用）
+def walk_docs(docs_dir: Path) -> list[Path]:
+    """遍历资料目录里的文件（跳过点开头的文件/目录）。"""
+    if not docs_dir.is_dir():
+        return []
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(docs_dir):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for f in sorted(filenames):
+            if f.startswith("."):
+                continue
+            out.append(Path(dirpath) / f)
+    return sorted(out)
+
+
+def scan_library(state: Path, wid: str, root: Path, docs_rel: str, extract_mode: str = "auto",
+                 default_level: str = "") -> dict:
+    """把资料目录同步进台账：新增 → pending；内容变了 → 退回 pending；没变 → 跳过。
+
+    返回 {"rows": [(标记, 相对路径, 说明)], "new/changed/same/skipped/failed": int, "docs_dir": str}
+    只写台账与抽取文本，不改已批准篇目的等级 —— 审批状态永远由维护者决定。
+    """
+    docs_dir = root / docs_rel
+    files = walk_docs(docs_dir)
+    res = {"rows": [], "new": 0, "changed": 0, "same": 0, "skipped": 0, "failed": 0,
+           "docs_dir": str(docs_dir), "total": len(files)}
+    if not files:
+        return res
+    cat0, _err = KB.load_catalog(state, wid)
+    old_docs = dict((cat0 or {}).get("docs") or {})
+    for f in files:
+        rel = str(f.relative_to(root))
+        did = KB.doc_id(rel)
+        cat_name = f.parent.name if f.parent != docs_dir else ""
+        lvl = default_level or ""          # 等级来自窗口配置，不是分类名
+        if f.suffix.lower() not in supported_exts():
+            KB.upsert_doc(state, wid, rel=rel, category=cat_name, level=lvl, status="unsupported",
+                          note=f"暂不支持的类型 {f.suffix}（需人工转成 .md/.txt）", keep_status=False)
+            c, _ = KB.load_catalog(state, wid)
+            e2 = (c.get("docs") or {}).get(did)
+            if e2:
+                e2["unsupported"] = True
+                KB.save_catalog(state, wid, c)
+            res["skipped"] += 1
+            res["rows"].append(("跳", rel, "类型不支持"))
+            continue
+        sha = KB.sha256_file(f)
+        old = old_docs.get(did) or {}
+        if old.get("sha256") == sha and old.get("text"):
+            res["same"] += 1
+            continue
+        text, err = extract(f, extract_mode)
+        if err or not text:
+            KB.upsert_doc(state, wid, rel=rel, category=cat_name, level=lvl, status="pending",
+                          sha=sha, note=f"抽取失败：{err}", keep_status=False)
+            res["failed"] += 1
+            res["rows"].append(("错", rel, err or "抽取为空"))
+            continue
+        tp = KB.kb_root(state, wid) / "text" / f"{did}.md"
+        tp.parent.mkdir(parents=True, exist_ok=True)
+        tp.write_text(text, encoding="utf-8")
+        was_approved = old.get("status") == "approved"
+        KB.upsert_doc(state, wid, rel=rel, category=cat_name, level=old.get("level") or lvl,
+                      text_rel=f"text/{did}.md", chars=len(text), sha=sha,
+                      text_sha=KB.sha256_file(tp), status="pending",
+                      note=("原文件内容已变更 → 审批失效，需重新审批" if was_approved else ""),
+                      keep_status=False)
+        if old:
+            res["changed"] += 1
+            res["rows"].append(("改", rel, f"{len(text)} 字符（内容变了，已退回待批）"))
+        else:
+            res["new"] += 1
+            res["rows"].append(("新", rel, f"{len(text)} 字符"))
+    return res

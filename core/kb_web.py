@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, urlencode
 import kb as KB
 import kb_access as ACC
 import kb_download as DL
+import kb_ingest as ING
 import kb_usage as USAGE
 
 CST = timezone(timedelta(hours=8))
@@ -68,6 +69,16 @@ def ensure_admin_token(state_root: Path, create: bool = True) -> str:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"token": tok, "created_at": _now()}, ensure_ascii=False, indent=2) + "\n",
                  encoding="utf-8")
+    return tok
+
+
+def rotate_admin_token(state_root: Path) -> str:
+    """换一条新的管理令（旧的立刻失效）。管理页地址一旦被转发出去就换它。"""
+    tok = "adm_" + secrets.token_urlsafe(24)
+    p = admin_token_path(state_root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"token": tok, "created_at": _now(), "rotated": True},
+                            ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return tok
 
 
@@ -257,8 +268,83 @@ def page_files(base: str, person: str, levels: list[str], docs: list[dict], toke
     return _page("我的资料", body, base)
 
 
+def _docs_section(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
+                  root: Path, docs_rel: str) -> str:
+    """管理页的「资料」一节：扫库 + 待批逐篇公开（当场选等级）+ 已公开改等级/下架 + 不支持的提示。
+
+    等价命令行：lighthouse.sh kb scan|pending|approve|revoke —— 同一份台账、同一套闸门。
+    """
+    cat, err = KB.load_catalog(state_root, wid)
+    docs = dict((cat or {}).get("docs") or {})
+    if err:
+        return '<h2>资料</h2><div class="warn">台账读不到：' + esc(err) + '</div>'
+
+    def opts(cur: str) -> str:
+        return "".join('<option value="' + esc(l) + '"' + (" selected" if l == cur else "") + ">"
+                       + esc(l) + "</option>" for l in levels)
+
+    def form(did: str, cur: str, buttons: list) -> str:
+        bts = ""
+        for act, label, cls in buttons:
+            klass = ' class="ghost"' if cls == "ghost" else ""
+            bts += ('<button' + klass + ' type="submit" name="action" value="' + esc(act) + '">'
+                    + esc(label) + "</button> ")
+        return ('<form method="post" action="' + esc(base) + '/admin/doc">'
+                '<input type="hidden" name="k" value="' + esc(admin) + '">'
+                '<input type="hidden" name="did" value="' + esc(did) + '">'
+                '<select name="level">' + opts(cur) + "</select> " + bts + "</form>")
+
+    rows_p, rows_a, rows_u = [], [], []
+    for did, e in sorted(docs.items(), key=lambda t: ((t[1].get("category") or ""), (t[1].get("title") or ""))):
+        st = e.get("status")
+        title = ('<b>' + esc(e.get("title")) + '</b><br><span class="hint">'
+                 + esc(e.get("category") or "-") + " · " + str(int(e.get("chars") or 0)) + " 字 · <code>"
+                 + esc(did) + "</code></span>")
+        prev = '<a href="' + esc(base) + "/dl/" + esc(did) + "?k=" + esc(admin) + '" target="_blank">看原件</a>'
+        if st == "pending":
+            note = e.get("note") or ""
+            warn = '<br><span class="warn">' + esc(note) + "</span>" if note else ""
+            rows_p.append("<tr><td>" + title + warn + "</td><td>" + prev + "</td><td>"
+                          + form(did, e.get("level") or levels[0],
+                                 [("approve", "公开", ""), ("reject", "不公开", "ghost")]) + "</td></tr>")
+        elif st == "approved":
+            rows_a.append("<tr><td>" + title + "</td><td>" + esc(e.get("level")) + "</td><td>" + prev + "</td><td>"
+                          + form(did, e.get("level") or levels[0],
+                                 [("setlevel", "改等级", ""), ("revoke", "下架", "ghost")]) + "</td></tr>")
+        elif st == "unsupported":
+            rows_u.append("<tr><td>" + title + "</td><td>" + esc(e.get("note") or "需人工转成 .md/.txt 后再扫")
+                          + "</td><td>" + form(did, e.get("level") or levels[0],
+                                               [("forget", "从台账删掉", "ghost")]) + "</td></tr>")
+
+    pt = ('<table><tr><th>资料</th><th>预览</th><th>定等级并公开</th></tr>' + "".join(rows_p) + "</table>"
+          if rows_p else '<p class="hint">没有待批资料。新文件放进资料目录后点上面的「扫描资料目录」。</p>')
+    at = ('<table><tr><th>资料</th><th>等级</th><th>预览</th><th>调整</th></tr>' + "".join(rows_a) + "</table>"
+          if rows_a else '<p class="hint">还没有公开任何资料 —— 同事现在什么都看不到。</p>')
+    ut = ('<table><tr><th>资料</th><th>说明</th><th>处理</th></tr>' + "".join(rows_u) + "</table>"
+          if rows_u else "")
+    bulk = ('<form method="post" action="' + esc(base) + '/admin/doc" style="margin-top:10px">'
+            '<input type="hidden" name="k" value="' + esc(admin) + '">'
+            '<input type="hidden" name="action" value="approve_all">'
+            "<label>全部待批按</label><select name=\"level\">" + opts(levels[0]) + "</select>"
+            '<button type="submit">一律公开</button></form>') if rows_p else ""
+
+    head = ('<h2>资料（已公开 ' + str(len(rows_a)) + " 篇 · 待批 " + str(len(rows_p)) + " 篇）</h2>")
+    return (
+        head
+        + '<form method="post" action="' + esc(base) + '/admin/scan" style="margin-bottom:10px">'
+          '<input type="hidden" name="k" value="' + esc(admin) + '">'
+          "<label>资料目录</label><code>" + esc(str(root / docs_rel)) + "</code>"
+          '<button type="submit">扫描资料目录</button>'
+          '<span class="hint">把新文件读进台账、抽取文本；内容变了的会自动退回待批</span></form>'
+        + pt + bulk
+        + "<h3>已公开（同事能看 / 能下的）</h3>" + at
+        + ('<h3>类型不支持（需人工转文本）</h3>' + ut if ut else "")
+    )
+
+
 def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
-               host: str, msg: str = "", remote: bool = False) -> bytes:
+               host: str, msg: str = "", remote: bool = False,
+               root: Path | None = None, docs_rel: str = "") -> bytes:
     pend = KB.pending_requests(state_root, wid)
     prows = []
     for r in sorted(pend, key=lambda x: x.get("created_at") or ""):
@@ -281,11 +367,15 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
               + "".join(prows) + "</table>") if prows else '<p class="hint">没有待批申请。</p>'
 
     all_levels = "".join(f'<option value="{esc(l)}">{esc(l)}</option>' for l in levels)
+    docs_html = (_docs_section(base, state_root, wid, admin, levels, root, docs_rel)
+                 if root is not None else '')
     body = f"""{msg}
 <p class="lead">管理页 · {esc(_now())}　{'（可从公网访问：请勿把本页地址转发给别人）' if remote else '（仅部署机本机可访问）'}</p>
 
 <h2>待批申请（{len(pend)}）</h2>
 {ptable}
+
+{docs_html}
 
 <h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>
 {_users_table(state_root, wid, admin, base)}
@@ -397,7 +487,8 @@ class _Portal:
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
-                         "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate", "/healthz"}
+                         "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
+                         "/admin/scan", "/admin/doc", "/healthz"}
         if sub not in portal_routes and not sub.startswith("/dl/"):
             accept = hdrs.get("accept", "")
             if sub in ("", "/") and method == "GET" and "text/html" in accept and "text/event-stream" not in accept:
@@ -476,17 +567,23 @@ class _Portal:
         return e, f, ""
 
     async def _download(self, scope, send, qs: dict, form: dict, sub: str):
-        person, levels, err = self._who(scope, qs, form)
+        # 管理令（管理页里的「看原件」）：维护者预览用，等级放开，审计记成「维护者(管理令)」
+        adm = (qs.get("k") or [""])[0] or (form.get("k") or "")
+        admin_preview = bool(adm) and adm == ensure_admin_token(self.state_root, create=False)
         sp, sexp, ssig = self._signed_parts(qs)
         signed = False
-        if not person and sp:
-            # 签名链接：先认人（等级按他的人查），**签名等知道是哪一篇之后再验**
-            person, signed = sp, True
-            rec = ACC.get_user(self.state_root, self.win.id, person) or {}
-            levels = list(rec.get("levels") or [])
-            if not DL.person_active(self.state_root, self.win.id, person):
-                person = ""
-                err = "这个人的地址已停用或到期"
+        if admin_preview:
+            person, levels, err = "维护者(管理令)", list(self.levels), ""
+        else:
+            person, levels, err = self._who(scope, qs, form)
+            if not person and sp:
+                # 签名链接：先认人（等级按他的人查），**签名等知道是哪一篇之后再验**
+                person, signed = sp, True
+                rec = ACC.get_user(self.state_root, self.win.id, person) or {}
+                levels = list(rec.get("levels") or [])
+                if not DL.person_active(self.state_root, self.win.id, person):
+                    person = ""
+                    err = "这个人的地址已停用或到期"
         if not person:
             err = err or "需要你的地址或有效链接"
             self.audit("kb_download", {"path": sub}, False, {"reason": err, "denied": True})
@@ -497,7 +594,7 @@ class _Portal:
 
         dcfg = DL.download_cfg(self.cfg)
         if not dcfg.get("enabled"):
-            self.audit("kb_download", {"path": sub}, False, {"reason": "未开放下载", "person": person, "levels": levels})
+            self.audit("kb_download", {"path": sub}, False, {"reason": "未开放下载", "person": person, "levels": levels, "admin": admin_preview})
             return await self._send(send, _page("未开放下载", '<div class="warn">本资料库只开放在线阅读，'
                                                               "不提供文件下载。</div>", self.base), 403)
 
@@ -514,7 +611,7 @@ class _Portal:
                     KB.approved_entries(self.state_root, self.win.id, cat or {}, self.win.root,
                                         self.win.check, levels)]
             tok = (qs.get("t") or [""])[0] or self._token
-            self.audit("kb_files", {"count": len(docs)}, True, {"person": person, "levels": levels, "ip": self._ip})
+            self.audit("kb_files", {"count": len(docs)}, True, {"person": person, "levels": levels, "ip": self._ip, "admin": admin_preview})
             return await self._send(send, page_files(self.base, person, levels, docs, tok, dcfg))
 
         # ② 单篇下载
@@ -542,7 +639,8 @@ class _Portal:
             if f.suffix.lower() == ".md" and not name.lower().endswith((".md",)):
                 name += ".md"
             self.audit("kb_download", {"doc_id": did, "mode": mode, "bytes": len(data)}, True,
-                       {"person": person, "levels": levels, "title": (e or {}).get("title"), "ip": self._ip})
+                       {"person": person, "levels": levels, "title": (e or {}).get("title"), "ip": self._ip,
+                                   "admin": admin_preview})
             await send({"type": "http.response.start", "status": 200, "headers": [
                 (b"content-type", DL.media_type(f).encode()),
                 (b"content-length", str(len(data)).encode()),
@@ -658,8 +756,10 @@ class _Portal:
                 by = "person"
             return await self._send(send, page_usage(self.base, self.state_root, self.win.id, admin, by, days))
         if sub == "/admin" and method == "GET":
-            return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
-                                                     self.levels, self.host, remote=self.remote))
+            return await self._send(send, page_admin(
+                self.base, self.state_root, self.win.id, admin, self.levels, self.host,
+                remote=self.remote, root=self.win.root,
+                docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"))
         if method != "POST":
             return await self._send(send, _page("没有这个页面", '<p class="lead">没有这个页面。</p>', self.base), 404)
 
@@ -723,8 +823,94 @@ class _Portal:
                        f'<br><code>{esc(self._address(u["token"]))}</code></div>')
             else:
                 msg = '<div class="warn">找不到这个人。</div>'
+        if sub == "/admin/scan":
+            docs_rel = (self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"
+            import config as C
+            res = ING.scan_library(self.state_root, self.win.id, self.win.root, docs_rel, "auto",
+                                   default_level=C.window_kb_default_level(self.cfg))
+            self.audit("kb_scan", {"extract": "auto"}, True,
+                       {"actor": "admin", "ip": ip, "new": res["new"], "changed": res["changed"],
+                        "same": res["same"], "skipped": res["skipped"], "failed": res["failed"]})
+            rows = "".join("<li>" + esc(m) + " " + esc(rel) + " — " + esc(note) + "</li>"
+                           for m, rel, note in res["rows"][:30])
+            msg = ('<div class="ok">扫描完成：新增待批 ' + str(res["new"]) + " · 内容变化退回待批 "
+                   + str(res["changed"]) + " · 未变 " + str(res["same"]) + " · 跳过 "
+                   + str(res["skipped"]) + " · 失败 " + str(res["failed"]) + "</div>"
+                   + ('<ul class="hint">' + rows + "</ul>" if rows else ""))
+
+        elif sub == "/admin/doc":
+            did = form.get("did", "")
+            act = form.get("action", "")
+            level = form.get("level", "")
+
+            def _one(d: str, lvl: str) -> str:
+                """公开一篇（返回提示文本；失败抛 ValueError）。"""
+                rec = KB.set_status(self.state_root, self.win.id, d, "approved", level=lvl, by="维护者")
+                if not rec:
+                    raise ValueError("台账里没有这一篇")
+                self.audit("kb_approve", {"doc_id": d, "level": lvl}, True,
+                           {"actor": "admin", "ip": ip, "title": rec.get("title"),
+                            "category": rec.get("category")})
+                return esc(rec.get("title") or d)
+
+            try:
+                if act == "approve":
+                    if level not in self.levels:
+                        msg = '<div class="warn">等级不在本窗允许清单里。</div>'
+                    else:
+                        msg = '<div class="ok">✅ 已公开：' + _one(did, level) + "（" + esc(level) + "）</div>"
+                elif act == "setlevel":
+                    if level not in self.levels:
+                        msg = '<div class="warn">等级不在本窗允许清单里。</div>'
+                    else:
+                        title = _one(did, level)
+                        self.audit("kb_setlevel", {"doc_id": did, "level": level}, True,
+                                   {"actor": "admin", "ip": ip})
+                        msg = ('<div class="ok">✅ ' + title + " 的等级已改成 " + esc(level)
+                               + "（有这条等级地址的同事立即生效，无需重启）</div>")
+                elif act in ("reject", "revoke"):
+                    rec = KB.set_status(self.state_root, self.win.id, did,
+                                        "rejected" if act == "reject" else "pending",
+                                        by="维护者", note=("维护者下架" if act == "revoke" else ""))
+                    self.audit("kb_revoke" if act == "revoke" else "kb_reject", {"doc_id": did}, True,
+                               {"actor": "admin", "ip": ip, "title": (rec or {}).get("title")})
+                    msg = ('<div class="ok">' + ("已下架（回到待批，同事立刻看不到也下不到）："
+                                                 if act == "revoke" else "已设为不公开：")
+                           + esc((rec or {}).get("title") or did) + "</div>")
+                elif act == "forget":
+                    cat, err = KB.load_catalog(self.state_root, self.win.id)
+                    if err or did not in (cat.get("docs") or {}):
+                        msg = '<div class="warn">台账里没有这一篇。</div>'
+                    else:
+                        cat["docs"].pop(did, None)
+                        KB.save_catalog(self.state_root, self.win.id, cat)
+                        self.audit("kb_forget", {"doc_id": did}, True, {"actor": "admin", "ip": ip})
+                        msg = '<div class="ok">已从台账删掉（文件本身没动；下次扫描会重新进来）。</div>'
+                elif act == "approve_all":
+                    if level not in self.levels:
+                        msg = '<div class="warn">等级不在本窗允许清单里。</div>'
+                    else:
+                        cat, _err = KB.load_catalog(self.state_root, self.win.id)
+                        pend = [d for d, e in (cat.get("docs") or {}).items() if e.get("status") == "pending"]
+                        done, bad = 0, []
+                        for d in pend:
+                            try:
+                                _one(d, level)
+                                done += 1
+                            except (ValueError, RuntimeError) as e:                  # noqa: PERF203
+                                bad.append(d + "：" + str(e))
+                        msg = ('<div class="ok">✅ 已公开 ' + str(done) + " 篇（" + esc(level) + "）</div>"
+                               + ("".join('<div class="warn">' + esc(x) + "</div>" for x in bad) if bad else ""))
+                else:
+                    msg = '<div class="warn">不认识的动作用。</div>'
+            except (ValueError, RuntimeError) as e:
+                msg = '<div class="warn">⛔ 不能这么做：' + esc(str(e)) + "</div>"
+
         return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
-                                                 self.levels, self.host, msg, remote=self.remote))
+                                                 self.levels, self.host, msg, remote=self.remote,
+                                                 root=self.win.root,
+                                                 docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"))
+
 
 
 def _levels_from(cfg: dict) -> list[str]:
