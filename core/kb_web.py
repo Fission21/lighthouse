@@ -1652,10 +1652,25 @@ class _Portal:
                    {"actor": "admin", "ip": ip, "by": "upload", "new": res["new"],
                     "changed": res["changed"], "same": res["same"],
                     "skipped": res["skipped"], "failed": res["failed"]})
+        # 这次上传真正带来变化的篇目（新增 / 内容变了）；同名同内容的旧篇目一律不动
+        fresh = {KB.doc_id(r2) for mark, r2, _n in res["rows"] if mark in ("新", "改")}
+
+        def _tag(rel: str) -> str:
+            for mark, r2, note in res["rows"]:
+                if r2 != rel:
+                    continue
+                return {"新": "（新增）", "改": "（内容变了 → 已退回待批）",
+                        "跳": "（类型不支持，" + note + "）",
+                        "错": "（抽取失败：" + note + "）"}.get(mark, "")
+            return "（已存在、内容没变 → 原样保留，等级和状态都没动）"
+
+        lines = [x + _tag(rel) for x, rel in zip(lines, saved)] if len(lines) == len(saved) else lines
         published, bad = 0, []
         if after == "publish":
             for rel in saved:
                 did = KB.doc_id(rel)
+                if did not in fresh:
+                    continue                     # 同名同内容的旧篇目：别悄悄改它的等级/状态
                 try:
                     KB.set_status(self.state_root, self.win.id, did, "approved", level=level, by="维护者")
                     self.audit("kb_approve", {"doc_id": did, "level": level}, True,
@@ -1667,15 +1682,24 @@ class _Portal:
                      reasons=[x[:70] for x in lines if x.startswith("⛔")][:5])
         self.audit("kb_upload", trace, bool(saved), {"actor": "admin", "ip": ip})
         print(f"[upload] {'✅' if saved else '⛔'} {trace}", flush=True)
+        same_new = len(saved) - len([1 for rel in saved if KB.doc_id(rel) in fresh])
+        if published:
+            tail = ("，其中 <b>" + str(published) + "</b> 篇已按 " + esc(level)
+                    + " 公开（同事现在就能看/能下）")
+        elif fresh:
+            tail = "，已进「待批」，你在下面逐篇定等级即可"
+        else:
+            tail = "；但这次没有新资料或内容变化，所以什么都不会变（列表不会多出重复的一行）"
+        if same_new:
+            tail += (f"；另有 <b>{same_new}</b> 个文件资料库里本来就有、内容一模一样，"
+                     "没新建条目也没动它的等级 —— 所以列表里不会多出重复的一行")
         msg = ('<div class="ok"><b>已收下 ' + str(len(saved)) + " 个文件</b>（"
-               + str(round(total / 1048576, 2)) + " MB）"
-               + ("，其中 <b>" + str(published) + "</b> 篇已按 " + esc(level) + " 公开（同事现在就能看/能下）"
-                  if published else "，已进「待批」，你在下面逐篇定等级即可")
-               + "</div>"
+               + str(round(total / 1048576, 2)) + " MB）" + tail + "</div>"
                + ('<ul class="hint">' + "".join("<li>" + x + "</li>" for x in lines[:40]) + "</ul>")
                + ("".join('<div class="warn">' + esc(x) + "</div>" for x in bad))
-               + ('<p class="hint">抽取：新增 ' + str(res["new"]) + " · 退回待批 " + str(res["changed"])
-                  + " · 未变 " + str(res["same"]) + " · 类型不支持 " + str(res["skipped"]) + "</p>"))
+               + ('<p class="hint">资料目录同步结果：新增 ' + str(res["new"]) + " 篇 · 内容更新（退回待批）"
+                  + str(res["changed"]) + " 篇 · 没变 " + str(res["same"]) + " 篇 · 类型不支持 "
+                  + str(res["skipped"]) + " 篇</p>"))
         return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
                                                  self.levels, self.host, msg, remote=self.remote,
                                                  root=self.win.root, docs_rel=docs_rel,

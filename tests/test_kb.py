@@ -919,6 +919,23 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
     _sh.rmtree(docs / "etc", ignore_errors=True)
 
 
+    # 同一份文件再传一次（内容没变）：不许新建条目，也不许把原有等级/状态改掉
+    did_rep = KB.doc_id("原始文档/技术/子方案/网络/拓扑说明.md")
+    KB.set_status(state, "kb1", did_rep, "approved", level="L2-技术", by="测试")
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin,
+                              {"k": admin, "category": "技术", "level": "L1-商务", "after": "publish"},
+                              [("files", "子方案/网络/拓扑说明.md", "# 拓扑说明\n\n子目录也要跟着建。\n".encode())])
+    check("同一份文件再传一次：不新建条目（列表不会多出重复的一行）",
+          st == 200 and "本来就有、内容一模一样" in body, f"HTTP {st}")
+    check("同一份文件再传一次：回执不说「已进待批」（什么都没变就照实说）",
+          "没有新资料或内容变化" in body, body[:80])
+    n_docs = len((KB.load_catalog(state, "kb1")[0].get("docs") or {}))
+    e_rep = (KB.load_catalog(state, "kb1")[0].get("docs") or {}).get(did_rep) or {}
+    check("同一份文件再传一次：条目数不变 + 原有等级和状态都没被悄悄改掉",
+          e_rep.get("status") == "approved" and e_rep.get("level") == "L2-技术",
+          f"{n_docs} 篇 status={e_rep.get('status')} level={e_rep.get('level')}")
+
+
 # ---------------------------------------------------------------- ⑨ 同事管理：改等级与其它
 async def part_users(site: str, state: Path, zhang: dict):
     print("\n⑨ 同事管理页：改等级（多档）/ 有效期 / 部门备注 / 停用 / 换地址 / 改名 / 删除")
