@@ -2,6 +2,7 @@
 """灯塔 全局配置 —— config.json 读写（带默认值，缺字段不报错）。"""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -32,10 +33,8 @@ DEFAULTS: dict = {
 
 def load() -> dict:
     cfg = dict(DEFAULTS)
-    try:
+    with contextlib.suppress(OSError, json.JSONDecodeError):
         cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        pass
     return cfg
 
 
@@ -46,6 +45,49 @@ def save(cfg: dict) -> None:
 def state_dir() -> Path:
     """状态目录：审计 / 备份 / 写开关 / 日志都放这儿。"""
     return Path(os.path.expanduser(os.environ.get("LIGHTHOUSE_STATE", load()["state_dir"])))
+
+
+def load_registry() -> dict:
+    """读整份窗口注册表（含被禁用的），给需要改配置的命令用。"""
+    try:
+        return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"windows": {}}
+
+
+def save_registry(reg: dict) -> None:
+    """写回注册表（保持 2 空格缩进，方便人肉 review / git diff）。"""
+    REGISTRY_PATH.write_text(json.dumps(reg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def window_set_option(wid: str, dotted: str, value) -> bool:
+    """给某个窗口设一个配置项，键用点号路径（如 kb.portal.theme）。
+
+    只改这一处，其它字段原样保留 —— 手写的注释性字段（"_note" 之类）也不会丢。
+    """
+    reg = load_registry()
+    win = (reg.get("windows") or {}).get(wid)
+    if win is None:
+        return False
+    node = win
+    keys = dotted.split(".")
+    for k in keys[:-1]:
+        if not isinstance(node.get(k), dict):
+            node[k] = {}
+        node = node[k]
+    node[keys[-1]] = value
+    save_registry(reg)
+    return True
+
+
+def window_get_option(wid: str, dotted: str, default=None):
+    win = (load_registry().get("windows") or {}).get(wid) or {}
+    node = win
+    for k in dotted.split("."):
+        if not isinstance(node, dict) or k not in node:
+            return default
+        node = node[k]
+    return node
 
 
 def windows(include_disabled: bool = False) -> dict:

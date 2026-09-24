@@ -17,9 +17,9 @@
 """
 from __future__ import annotations
 
+import contextlib
 import html
 import json
-import os
 import re
 import secrets
 import time
@@ -29,11 +29,12 @@ from urllib.parse import parse_qs, quote, urlencode
 
 import kb as KB
 import kb_access as ACC
-import kb_download as DL
 import kb_auth as AUTH
-import kb_invite as INV
+import kb_download as DL
 import kb_ingest as ING
+import kb_invite as INV
 import kb_usage as USAGE
+import theme as THEME
 
 CST = timezone(timedelta(hours=8))
 _RATE: dict[str, list[float]] = {}          # 申请人限速：{ip: [时间戳]}
@@ -118,99 +119,115 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
     return f"""<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title><style>
-  :root {{ color-scheme: light;
-    --ink: #14161a; --dim: #6b7280; --line: #e6e8ec; --card: #fff; --bg: #f6f7f9;
-    --blue: #0a6cff; --blue-d: #0857cc; --green: #127a45; --green-b: #e6f6ec;
-    --amber: #8a5a00; --amber-b: #fff6e5; --red: #a02318; --red-b: #fdecea;
-    --violet: #5b21b6; --violet-b: #f1eafe; --accent: #0a6cff; }}
+  {THEME.theme_css(THEME.current())}
   * {{ box-sizing: border-box; }}
-  body {{ font: 15px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-         margin: 0 auto; padding: 22px 16px 72px; max-width: {width}; color: var(--ink); background: var(--bg); }}
-  h1 {{ font-size: 22px; margin: 0 0 2px; letter-spacing: -.2px; }}
-  h2 {{ font-size: 17px; margin: 30px 0 10px; }}
-  h3 {{ font-size: 15px; margin: 22px 0 8px; color: #374151; }}
-  p.lead {{ color: var(--dim); margin: 0 0 16px; }}
-  nav {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; font-size: 14px; }}
-  nav a {{ color: var(--ink); text-decoration: none; background: #fff; border: 1px solid var(--line);
-          padding: 5px 12px; border-radius: 999px; }}
-  nav a:hover {{ border-color: var(--blue); color: var(--blue); }}
-  .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
-          margin: 0 0 14px; }}
-  form {{ background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
-         margin: 0 0 14px; }}
-  form.inline {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px;
-         background: #fff; }}
+  body {{ font: var(--f3)/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0 auto; padding: var(--s5) var(--s4) 72px; max-width: {width}; color: var(--ink);
+         background: var(--bg); }}
+  h1 {{ font-size: var(--f5); margin: 0 0 var(--s1); letter-spacing: -.2px; }}
+  h2 {{ font-size: var(--f4); margin: var(--s6) 0 var(--s3); }}
+  h3 {{ font-size: var(--f3); margin: var(--s5) 0 var(--s2); color: var(--dim); }}
+  p.lead {{ color: var(--dim); margin: 0 0 var(--s4); }}
+  /* 顶部导航：一排胶囊，悬停用强调色 */
+  nav {{ display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; margin-bottom: var(--s4);
+        font-size: 14px; }}
+  nav a {{ color: var(--ink); text-decoration: none; background: var(--card); border: 1px solid var(--line);
+          padding: 5px var(--s3); border-radius: var(--r4); }}
+  nav a:hover {{ border-color: var(--accent); color: var(--accent); }}
+  .card, form {{ background: var(--card); border: 1px solid var(--line); border-radius: var(--r3);
+          padding: var(--s4); margin: 0 0 var(--s4); box-shadow: var(--sh1); }}
+  form.inline {{ display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s3); }}
   form.inline label {{ margin: 0; }}
-  label {{ display: block; margin: 12px 0 4px; font-size: 13px; color: #374151; font-weight: 500; }}
-  input, select, textarea {{ width: 100%; font: inherit; padding: 9px 10px; border: 1px solid #d5d8de;
-         border-radius: 9px; background: #fff; color: var(--ink); }}
-  input:focus, select:focus, textarea:focus {{ outline: 2px solid #cfe1ff; border-color: var(--blue); }}
+  label {{ display: block; margin: var(--s3) 0 var(--s1); font-size: var(--f2); color: var(--dim);
+          font-weight: 500; }}
+  input, select, textarea {{ width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line2);
+          border-radius: var(--r1); background: var(--card); color: var(--ink); }}
+  input:focus, select:focus, textarea:focus {{ outline: 2px solid var(--focus); border-color: var(--accent); }}
   textarea {{ min-height: 76px; }}
   form.inline input, form.inline select {{ width: auto; min-width: 90px; }}
-  button {{ font: inherit; padding: 9px 16px; border: 0; border-radius: 9px; background: var(--blue);
-         color: #fff; font-weight: 600; cursor: pointer; }}
-  button:hover {{ background: var(--blue-d); }}
-  button.ghost {{ background: #eceef2; color: var(--ink); font-weight: 500; }}
-  button.ghost:hover {{ background: #e2e5ea; }}
-  button.danger {{ background: #fff; color: var(--red); border: 1px solid #f3c9c4; font-weight: 500; }}
-  button.tiny {{ padding: 5px 10px; font-size: 13px; border-radius: 7px; }}
-  .toolbar {{ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }}
-  .toolbar input[type=search], .toolbar input[type=text] {{ width: auto; min-width: 180px; }}
-  .wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: #fff; }}
+  /* 按钮层级：默认=主操作（**一屏一个**）；ghost=次要；danger=危险；quiet=最轻；tiny=行内小号 */
+  button {{ font: inherit; padding: 9px var(--s4); border: 0; border-radius: var(--r1);
+          background: var(--brand); color: #fff; font-weight: 600; cursor: pointer; }}
+  button:hover {{ background: var(--brand_d); }}
+  button.ghost {{ background: var(--btn2); color: var(--ink); font-weight: 500; }}
+  button.ghost:hover {{ background: var(--btn2h); }}
+  button.quiet {{ background: transparent; color: var(--accent); font-weight: 500; padding: 6px var(--s2); }}
+  button.quiet:hover {{ background: var(--accent_b); }}
+  button.danger {{ background: var(--card); color: var(--danger); font-weight: 500;
+          border: 1px solid color-mix(in srgb, var(--danger) 32%, #fff); }}
+  button.danger:hover {{ background: var(--danger_b); }}
+  button.tiny {{ padding: 5px var(--s2); font-size: var(--f2); border-radius: var(--r1); }}
+  .toolbar {{ display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; margin: var(--s3) 0; }}
+  .toolbar input[type=search], .toolbar input[type=text] {{ width: auto; min-width: 200px; }}
+  .wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r3);
+          background: var(--card); box-shadow: var(--sh1); }}
   table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-  th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid #f1f3f6; vertical-align: top; }}
-  th {{ background: #fbfbfd; font-weight: 600; white-space: nowrap; position: sticky; top: 0; }}
+  th, td {{ text-align: left; padding: 13px var(--s4); border-bottom: 1px solid var(--line);
+          vertical-align: top; }}
+  th {{ background: var(--th-bg); font-weight: 600; white-space: nowrap; position: sticky; top: 0; }}
   tr:last-child td {{ border-bottom: 0; }}
-  tr:hover td {{ background: #fcfdff; }}
-  td.acts {{ white-space: nowrap; }}
-  td.acts form {{ border: 0; padding: 0; margin: 0; background: none; display: flex; gap: 6px; align-items: center; }}
-  td.acts select {{ width: auto; min-width: 96px; padding: 5px 8px; font-size: 13px; }}
-  code {{ background: #f3f4f7; padding: 1px 6px; border-radius: 6px; word-break: break-all; font-size: 13px; }}
+  tr:hover td {{ background: var(--row-hover); }}
+  td.acts {{ white-space: nowrap; padding-right: var(--s4); }}
+  td.acts form {{ border: 0; padding: 0; margin: 0; background: none; box-shadow: none;
+          display: flex; gap: var(--s2); align-items: center; }}
+  /* 按钮成组时统一用它撑开间距（td 本身不能设 flex，会破坏表格布局） */
+  .actsrow {{ display: inline-flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }}
+  td.acts select {{ width: auto; min-width: 112px; padding: 6px 9px; font-size: var(--f2); }}
+  code {{ background: var(--code-bg); padding: 1px 6px; border-radius: var(--r1);
+          word-break: break-all; font-size: var(--f2); }}
   .dot {{ display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px;
-        vertical-align: middle; background: #c2c7d0; }}
-  .dot.on {{ background: #127a45; }}
-  .dot.off {{ background: #a02318; }}
-  .chip {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
-          border: 1px solid transparent; white-space: nowrap; }}
-  .c-l1 {{ background: var(--green-b); color: var(--green); border-color: #bfe6cd; }}
-  .c-l2 {{ background: #e8f1ff; color: #0b4fbf; border-color: #c7dcff; }}
-  .c-l3 {{ background: var(--violet-b); color: var(--violet); border-color: #ddcdfa; }}
-  .c-pending {{ background: var(--amber-b); color: var(--amber); border-color: #ffd8a8; }}
-  .c-approved {{ background: var(--green-b); color: var(--green); border-color: #bfe6cd; }}
-  .c-rejected, .c-unsupported {{ background: var(--red-b); color: var(--red); border-color: #f3c9c4; }}
-  .ok {{ background: var(--green-b); border: 1px solid #bfe6cd; border-radius: 12px; padding: 14px 16px;
-        margin: 0 0 14px; }}
-  .warn {{ background: var(--amber-b); border: 1px solid #ffd8a8; border-radius: 12px; padding: 14px 16px;
-        margin: 0 0 14px; }}
-  .hint {{ color: var(--dim); font-size: 13px; }}
+        vertical-align: middle; background: var(--dim); }}
+  .dot.on {{ background: var(--ok); }}
+  .dot.off {{ background: var(--danger); }}
+  .chip {{ display: inline-block; padding: 2px var(--s2); border-radius: var(--r4); font-size: var(--f1);
+          font-weight: 600; border: 1px solid transparent; white-space: nowrap; }}
+  .c-l1 {{ background: var(--ok_b); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 28%, #fff); }}
+  .c-l2 {{ background: var(--brand_b); color: var(--brand); border-color: color-mix(in srgb, var(--brand) 24%, #fff); }}
+  .c-l3 {{ background: var(--accent_b); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 24%, #fff); }}
+  .c-pending {{ background: var(--warn_b); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 26%, #fff); }}
+  .c-approved {{ background: var(--ok_b); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 28%, #fff); }}
+  .c-rejected, .c-unsupported {{ background: var(--danger_b); color: var(--danger);
+          border-color: color-mix(in srgb, var(--danger) 26%, #fff); }}
+  .ok {{ background: var(--ok_b); border: 1px solid color-mix(in srgb, var(--ok) 28%, #fff);
+        border-radius: var(--r2); padding: var(--s3) var(--s4); margin: 0 0 var(--s4); }}
+  .warn {{ background: var(--warn_b); border: 1px solid color-mix(in srgb, var(--warn) 28%, #fff);
+        border-radius: var(--r2); padding: var(--s3) var(--s4); margin: 0 0 var(--s4); }}
+  .hint {{ color: var(--dim); font-size: var(--f2); }}
   .muted {{ color: var(--dim); }}
   .big {{ font-size: 18px; font-weight: 700; letter-spacing: .5px; }}
-  .drop {{ border: 2px dashed #c9cfd8; border-radius: 14px; padding: 22px; text-align: center;
-        color: var(--dim); background: #fbfcfe; }}
-  .drop.hot {{ border-color: var(--blue); background: #f2f7ff; color: var(--blue); }}
-  .btnlabel {{ display: inline-block; padding: 8px 14px; background: #eceef2; border-radius: 9px;
+  .empty {{ border: 1px dashed var(--line2); border-radius: var(--r3); padding: var(--s5);
+        text-align: center; color: var(--dim); background: var(--card); }}
+  .drop {{ border: 2px dashed var(--line2); border-radius: var(--r3); padding: var(--s5);
+        text-align: center; color: var(--dim); background: var(--card); }}
+  .drop.hot {{ border-color: var(--accent); background: var(--accent_b); color: var(--accent); }}
+  .btnlabel {{ display: inline-block; padding: 8px var(--s3); background: var(--btn2); border-radius: var(--r1);
           cursor: pointer; color: var(--ink); font-weight: 500; }}
-  .btnlabel:hover {{ background: #e2e5ea; }}
+  .btnlabel:hover {{ background: var(--btn2h); }}
   .sr {{ position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; z-index: -1; }}
-  .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
-  .bar {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; background: #f8f9fb;
-        border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 0; }}
-  .lvpick {{ display: flex; flex-wrap: wrap; gap: 9px; margin-top: 6px; }}
-  .lvpick label {{ display: inline-flex; align-items: center; gap: 9px; padding: 8px 13px; cursor: pointer;
-        font-weight: 400; border: 1px solid var(--line); border-radius: 999px; line-height: 1; background: #fff; }}
-  .lvpick label:has(input:checked) {{ border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, #fff); }}
+  .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s2); }}
+  .bar {{ display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center; background: var(--card);
+        border: 1px solid var(--line); border-radius: var(--r2); padding: 13px 15px; margin: var(--s4) 0 0; }}
+  /* 条里的下拉框别拉满整行（拉满会把按钮挤到下一行、还显得头重脚轻） */
+  .bar select {{ width: auto; min-width: 150px; max-width: 280px; }}
+  .bar .sep {{ width: 1px; height: 22px; background: var(--line); flex: none; margin: 0 2px; }}
+  .lvpick {{ display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s1); }}
+  .lvpick label {{ display: inline-flex; align-items: center; gap: var(--s2); padding: 8px 13px;
+        cursor: pointer; font-weight: 400; border: 1px solid var(--line); border-radius: var(--r4);
+        line-height: 1; background: var(--card); }}
+  .lvpick label:has(input:checked) {{ border-color: var(--accent); background: var(--accent_b); }}
   .lvpick input {{ width: 17px; height: 17px; margin: 0; flex: none; }}
-  .rowform {{ border-top: 1px dashed var(--line); padding-top: 10px; }}
+  .rowform {{ border-top: 1px dashed var(--line); padding-top: var(--s3); }}
   .rowform .grid2 {{ grid-template-columns: repeat(2, minmax(150px, 1fr)); }}
   a.minor {{ color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }}
   .perm {{ min-width: 380px; }}
-  form .bar {{ margin-top: 12px; }}
+  form .bar {{ margin-top: var(--s4); }}
+  .wrap + .bar {{ margin-top: var(--s4); }}
   td .bar .hint {{ margin-left: 2px; }}
   /* 小字提示改成“鼠标移上去才出现”的气泡 */
   .q {{ display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
         margin-left: 5px; border-radius: 50%; border: 1px solid #c9cfd8; color: var(--dim); font-size: 11px;
         font-weight: 600; cursor: help; vertical-align: middle; background: #fff; flex: none; }}
-  .q:hover {{ border-color: var(--blue); color: var(--blue); }}
+  .q:hover {{ border-color: var(--accent); color: var(--accent); }}
   /* 同事折叠卡：默认只看一行，点「编辑」才展开 */
   details.ucard {{ background: #fff; border: 1px solid var(--line); border-radius: 14px;
         margin: 0 0 10px; padding: 0 14px; }}
@@ -219,7 +236,7 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
         list-style: none; cursor: pointer; padding: 12px 0; }}
   details.ucard > summary::-webkit-details-marker {{ display: none; }}
   details.ucard > summary .name {{ font-weight: 600; }}
-  details.ucard > summary .caret {{ margin-left: auto; color: var(--blue); font-size: 13px; font-weight: 600; }}
+  details.ucard > summary .caret {{ margin-left: auto; color: var(--accent); font-size: var(--f2); font-weight: 600; }}
   details.ucard[open] > summary .caret::before {{ content: "收起 ▴"; }}
   details.ucard:not([open]) > summary .caret::before {{ content: "编辑 ▾"; }}
   details.ucard .ubody {{ border-top: 1px dashed var(--line); padding: 2px 0 14px; }}
@@ -233,11 +250,11 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
         font-size: 13px; color: var(--dim); }}
   .pager a, .pager span.cur {{ padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
         background: #fff; color: var(--ink); text-decoration: none; }}
-  .pager span.cur {{ background: var(--blue); color: #fff; border-color: var(--blue); font-weight: 600; }}
+  .pager span.cur {{ background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 600; }}
   .pager a.off {{ opacity: .4; pointer-events: none; }}
   @media (max-width: 720px) {{ details.ucard .two {{ grid-template-columns: 1fr; }} }}
   @media (max-width: 640px) {{ th, td {{ padding: 8px; }} th {{ position: static; }} .perm {{ min-width: 280px; }} }}
-</style></head><body>{nav}<h1>{esc(title)}</h1>{body}</body></html>""".encode("utf-8")
+</style></head><body>{nav}<h1>{esc(title)}</h1>{body}</body></html>""".encode()
 
 
 def level_chip(level: str) -> str:
@@ -307,7 +324,7 @@ def page_register(base: str, levels: list[str], msg: str = "", code: str = "",
 
 
 def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "", who: str = "") -> bytes:
-    opts = "".join(f'<option value="{esc(l)}">{esc(l)}</option>' for l in levels)
+    opts = "".join(f'<option value="{esc(lv)}">{esc(lv)}</option>' for lv in levels)
     body = f"""<p class="lead">这是一个只读资料库。填写下面的申请，维护者审批通过后，
 你会拿到一条**属于你自己的访问地址**，把它填进你的 AI 助手（如 ChatGPT 连接器）就能用。</p>
 {msg}
@@ -385,7 +402,7 @@ def page_status(base: str, rec: dict | None, err: str = "", address: str = "") -
 
 def _copybtn(label: str, target: str) -> str:
     """复制按钮。**必须给完整地址**：只给路径的话，页面上的「复制」会复制出半截链接
-    （主人 2026-09-24 报过这个）。拿不到完整地址时，在浏览器里用 location.origin 补全。
+    （用户报过这个坑）。拿不到完整地址时，在浏览器里用 location.origin 补全。
 
     剪贴板 API 在「页面没聚焦」时会被拒（例如刚切回来），所以带一个 execCommand 兜底，
     失败了也告诉用户「手动选中下面的链接」，而不是只说一句复制失败。
@@ -441,8 +458,8 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
     """邀请码：生成 / 看状态 / 看谁用了 / 停用删除。注册的入口靠它把关。"""
     rows = INV.list_codes(state_root, wid)
     s = INV.summary(state_root, wid)
-    boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(l)}"><span>{esc(l)}</span></label>'
-                    for l in levels)
+    boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(lv)}"><span>{esc(lv)}</span></label>'
+                    for lv in levels)
     out = [f'''<h2>邀请码（同事凭它自助注册）</h2>
 <p class="hint">一码一人、可设有效期；同事拿注册链接自助领取地址和账号{_q("同事打开注册链接 → 填邀请码 + 姓名/部门/用途 + 自设用户名密码 → 当场拿到一条专属地址（填进他的 AI）和一个网页账号。谁发的码、发给了谁、谁在什么时间什么 IP 用的，都记在这张表里。")}</p>
 <div class="bar" style="background:transparent;border:0;padding:0;margin:6px 0">
@@ -485,11 +502,9 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
         link = (pub.rstrip("/") + path) if pub else path      # 完整地址，别给半截
         trs.append(f'''<tr>
 <td><code style="font-size:13px">{esc(r["code"])}</code>
-  <div class="bar" style="background:transparent;border:0;padding:0;margin:4px 0 0">
-    {_copybtn("复制注册链接", link)}
-    <span class="hint" style="word-break:break-all;display:block;margin-top:4px">{esc(link)}</span>
-  </div>
-  <span class="hint">可用 {len(uses)}/{int(r.get("max_uses") or 1)} 次</span></td>
+  <div class="hint" style="word-break:break-all;margin-top:4px">{esc(link)}</div>
+  <div class="actsrow" style="margin-top:6px">{_copybtn("复制注册链接", link)}
+    <span class="hint">可用 {len(uses)}/{int(r.get("max_uses") or 1)} 次</span></div></td>
 <td>{esc("、".join(r.get("levels") or []))}<br><span class="hint">{esc(r.get("note") or "")}</span></td>
 <td>{esc(r.get("person") or "（不限）")}<br><span class="hint">生成于 {esc(INV.fmt(r.get("created_at")))}</span></td>
 <td><span class="chip {cls}">{esc(st)}</span><br>
@@ -498,11 +513,12 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
 <td><form method="post" action="{esc(base)}/admin/invite">
   <input type="hidden" name="k" value="{esc(admin)}">
   <input type="hidden" name="code" value="{esc(r["code"])}">
-  <button class="tiny" name="action" value="{"revoke" if r.get("enabled", True) else "enable"}">
+  <span class="actsrow">
+  <button class="tiny ghost" name="action" value="{"revoke" if r.get("enabled", True) else "enable"}">
     {"停用" if r.get("enabled", True) else "恢复"}</button>
   <button class="tiny danger" name="action" value="delete"
     onclick="return confirm(`删掉这张邀请码？已经没人能用它注册了。`)">删除</button>
-</form></td></tr>''')
+</span></form></td></tr>''')
     out.append('<div class="wrap"><table><tr><th>邀请码</th><th>等级 / 备注</th><th>给谁 / 生成时间</th>'
                '<th>状态</th><th>谁用了</th><th>操作</th></tr>' + "".join(trs) + "</table></div>")
     return "".join(out)
@@ -524,8 +540,8 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
         address = ((pub.rstrip("/") if pub else "") + f"/kb-{token}")   # 必须带域名
         my_levels = list(u.get("levels") or [])
         lv_boxes = "".join(
-            f'<label><input type="checkbox" name="levels" value="{esc(l)}"'
-            f'{" checked" if l in my_levels else ""}><span>{esc(l)}</span></label>' for l in levels)
+            f'<label><input type="checkbox" name="levels" value="{esc(lv)}"'
+            f'{" checked" if lv in my_levels else ""}><span>{esc(lv)}</span></label>' for lv in levels)
         acct = AUTH.get(state_root, person) or {}
         acct_btn = "重置密码" if acct else "开通账号"
         acct_drop = ('<button class="tiny ghost" name="action" value="drop" '
@@ -539,8 +555,7 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
         if exp:
             left = (float(exp) - time.time()) / 86400
             cur_days = f"{int(left)} 天" if left > 0 else "已过期"
-        sc = "c-approved" if state else "c-unsupported"
-        chips = "".join(level_chip(l) for l in my_levels) or '<span class="chip c-pending">无等级</span>'
+        chips = "".join(level_chip(lv) for lv in my_levels) or '<span class="chip c-pending">无等级</span>'
         seen = str(u.get("last_seen") or "—")[:16].replace("T", " ")
         exp_full = ACC.describe_expiry(u)
         m_exp = re.search(r"(\d{4})-(\d{2}-\d{2})", exp_full)
@@ -671,7 +686,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         return "".join('<option value="' + esc(i) + '"' + (" selected" if i == cur else "") + ">"
                        + esc(i) + "</option>" for i in items)
 
-    lv_opts = "".join('<option value="' + esc(l) + '">' + esc(l) + "</option>" for l in levels)
+    lv_opts = "".join('<option value="' + esc(lv) + '">' + esc(lv) + "</option>" for lv in levels)
     cats = sorted({(e.get("category") or "") for e in docs.values()})
     cand = sorted(docs.items(), key=lambda t: ((t[1].get("category") or ""), (t[1].get("title") or "")))
     shown = []
@@ -691,11 +706,11 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         n_by[e.get("status")] = n_by.get(e.get("status"), 0) + 1
     n_app, n_pen = n_by.get("approved", 0), n_by.get("pending", 0)
     n_rej, n_uns = n_by.get("rejected", 0), n_by.get("unsupported", 0)
-    stat = "已公开 <b>%d</b> · 待批 <b>%d</b>" % (n_app, n_pen)
+    stat = f"已公开 <b>{n_app}</b> · 待批 <b>{n_pen}</b>"
     if n_rej:
-        stat += " · 不公开 %d" % n_rej
+        stat += f" · 不公开 {n_rej}"
     if n_uns:
-        stat += " · 类型不支持 %d" % n_uns
+        stat += f" · 类型不支持 {n_uns}"
 
     total_docs = len(shown)
     pages = max(1, (total_docs + per - 1) // per)
@@ -715,7 +730,8 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         st = e.get("status")
         acts = ""
         if st == "approved":
-            acts = ('<button class="tiny" name="one" value="' + esc(did) + '@setlevel">保存等级</button>'
+            acts = ('<button class="tiny ghost" name="one" value="' + esc(did) + '@setlevel">保存等级</button>'
+                    '<span class="sep" style="height:20px"></span>'
                     '<button class="tiny ghost" name="one" value="' + esc(did) + '@revoke">下架</button>')
         elif st == "unsupported":
             acts = ('<button class="tiny danger" name="one" value="' + esc(did) + '@forget">移除条目</button>')
@@ -726,7 +742,7 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
                     "<td>" + title + "</td><td>" + status_chip(st) + "</td>"
                     '<td><select name="level_' + esc(did) + '">' + opts(e.get("level") or levels[0], levels)
                     + "</select></td>"
-                    '<td class="acts">' + acts + "</td></tr>")
+                    '<td class="acts"><span class="actsrow">' + acts + "</span></td></tr>")
     table = ("<table><tr><th style=\"width:28px\"><input type=\"checkbox\" id=\"all\"></th>"
              "<th>资料</th><th>状态</th><th>等级</th><th>操作</th></tr>"
              + "".join(rows) + "</table>"
@@ -783,18 +799,19 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
         + "".join('<option value="' + esc(c) + '"' + (" selected" if c == f_cat else "") + ">"
                   + esc(c or "(根目录)") + "</option>" for c in cats)
         + '</select><select name="level"><option value="">全部等级</option>'
-        + "".join('<option value="' + esc(l) + '"' + (" selected" if l == f_lv else "") + ">" + esc(l)
-                  + "</option>" for l in levels)
-        + '</select><button class="tiny" type="submit">筛选</button>' + clear + "</form>")
+        + "".join('<option value="' + esc(lv) + '"' + (" selected" if lv == f_lv else "") + ">" + esc(lv)
+                  + "</option>" for lv in levels)
+        + '</select><button class="tiny ghost" type="submit">筛选</button>' + clear + "</form>")
 
     bulkbar = (
         '<div class="bar">'
         '<span class="hint" id="cnt">已选 0 篇</span>'
         '<label style="margin:0">批量定为</label><select name="bulk_level">' + lv_opts + "</select>"
+        '<span class="sep"></span>'
         '<button name="bulk" value="approve">设为公开</button>'
         '<button class="ghost" name="bulk" value="setlevel">只改等级</button>'
         '<button class="ghost" name="bulk" value="revoke">下架</button>'
-        '<button class="danger" name="bulk" value="forget">移除条目（不删文件）</button>'
+        '<button class="danger" style="margin-left:auto" name="bulk" value="forget">移除条目（不删文件）</button>'
         + _q("先勾选左边小方框：「设为公开」= 按右边等级放开；「只改等级」= 已公开的换个等级；"
              "「下架」= 回到待批（资料还在）；「移除条目」= 不再管这篇（文件不动）。") + "</div>")
 
@@ -927,8 +944,8 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
     pend = KB.pending_requests(state_root, wid)
     prows = []
     for r in sorted(pend, key=lambda x: x.get("created_at") or ""):
-        opts = "".join(f'<option value="{esc(l)}"{" selected" if l == r.get("level_requested") else ""}>'
-                       f'{esc(l)}</option>' for l in levels)
+        opts = "".join(f'<option value="{esc(lv)}"{" selected" if lv == r.get("level_requested") else ""}>'
+                       f'{esc(lv)}</option>' for lv in levels)
         prows.append(
             f'<tr><td>{esc(r.get("name"))}<br><span class="hint">{esc(r.get("dept"))}</span></td>'
             f'<td>{esc(r.get("level_requested"))}<br><span class="hint">{esc((r.get("created_at") or "")[:16].replace("T", " "))}</span></td>'
@@ -939,15 +956,15 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
             f'<select name="level">{opts}</select>'
             f'<select name="for_days"><option value="30">30 天</option><option value="7">7 天</option>'
             f'<option value="90">90 天</option><option value="0">无期限</option></select>'
-            f'<button type="submit" name="action" value="approve">批准</button> '
-            f'<button class="ghost" type="submit" name="action" value="deny">驳回</button>'
+            f'<span class="actsrow"><button type="submit" name="action" value="approve">批准</button>'
+            f'<button class="ghost" type="submit" name="action" value="deny">驳回</button></span>'
             f'</form></td></tr>')
     ptable = ('<table><tr><th>申请人</th><th>等级/时间</th><th>用途</th><th>处理</th></tr>'
-              + "".join(prows) + "</table>") if prows else '<p class="hint">没有待批申请。</p>'
+              + "".join(prows) + "</table>") if prows else ('<div class="empty">'
+        '没有待批申请。同事提交 L2/L3 申请后会出现在这里，手机上也能批。</div>')
 
-    all_levels = "".join(f'<option value="{esc(l)}">{esc(l)}</option>' for l in levels)
-    all_levels_boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(l)}">'
-                               f'<span>{esc(l)}</span></label>' for l in levels)
+    all_levels_boxes = "".join(f'<label><input type="checkbox" name="levels" value="{esc(lv)}">'
+                               f'<span>{esc(lv)}</span></label>' for lv in levels)
     def _pnum(key: str) -> int:
         try:
             return int((q.get(key) or ["1"])[0] or 1)
@@ -1038,6 +1055,8 @@ class _Portal:
         self.auto_levels = _auto_levels_from(cfg)
         self.remote = _admin_remote_from(cfg)
         self.public_request = bool((cfg.get("kb") or {}).get("portal", {}).get("allow_public_request", False))
+        # 配色主题：窗口配置 kb.portal.theme（indigo/teal/paper），不认识就回默认
+        self.theme = THEME.set_current((cfg.get("kb") or {}).get("portal", {}).get("theme"))
         self._ip = "-"          # 每个请求进来时更新，供审计用
         self._sess: dict | None = None   # 本次请求的登录会话（没登录 = None）
         AUTH.ensure_secret(self.state_root)     # 会话签名密钥（没有就生成，0600）
@@ -1068,7 +1087,7 @@ class _Portal:
 
     def _abs(self, path: str) -> str:
         """把窗口内的路径补成完整地址：给用户看/复制的链接一律走这里，
-        否则页面上的链接只有半截（主人 2026-09-24 报过）。"""
+        否则页面上的链接只有半截（用户报过这个坑）。"""
         return f"https://{self.host}{path}" if path.startswith("/") else path
 
     def _admin_net_block(self, scope, hdrs: dict) -> str:
@@ -1134,9 +1153,8 @@ class _Portal:
             return True                                   # 链接里带地址令牌或签名
         if sub == "/request" and self.public_request:
             return True
-        if sub == "/register":
-            return True                      # 注册靠邀请码把关，不需要先登录
-        return False
+        # 注册靠邀请码把关，不需要先登录
+        return sub == "/register"
 
     def _who_label(self) -> str:
         sess = self._sess if self._sess is not None else self._session({})
@@ -1228,7 +1246,6 @@ class _Portal:
 
     async def _register(self, send, method: str, qs: dict, form: dict, ip: str, hdrs: dict):
         """凭邀请码自助注册：一次填完 → 发地址 + 建账号 + 自动登录。"""
-        import config as C
         if method == "GET":
             code = (qs.get("c") or [""])[0]
             bound = ""
@@ -1663,9 +1680,10 @@ class _Portal:
         return target, ""
 
     async def _upload(self, scope, receive, send, admin: str, ip: str):
-        import config as C
         from starlette.datastructures import Headers
         from starlette.formparsers import MultiPartParser
+
+        import config as C
 
         hdrs = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
         ctype = hdrs.get("content-type", "")
@@ -1765,10 +1783,8 @@ class _Portal:
                            {"actor": "admin", "ip": ip, "bytes": size, "category": cat,
                             "level": level, "after": after})
         finally:
-            try:
+            with contextlib.suppress(Exception):     # 关流失败不该盖住真正的报错
                 await form.close()
-            except Exception:                                                    # noqa: BLE001
-                pass
 
         res = ING.scan_library(self.state_root, self.win.id, self.win.root, docs_rel, "auto",
                                default_level=C.window_kb_default_level(self.cfg))
@@ -1788,7 +1804,8 @@ class _Portal:
                         "错": "（抽取失败：" + note + "）"}.get(mark, "")
             return "（已存在、内容没变 → 原样保留，等级和状态都没动）"
 
-        lines = [x + _tag(rel) for x, rel in zip(lines, saved)] if len(lines) == len(saved) else lines
+        lines = ([x + _tag(rel) for x, rel in zip(lines, saved, strict=False)]
+                 if len(lines) == len(saved) else lines)
         published, bad = 0, []
         if after == "publish":
             for rel in saved:
@@ -1831,7 +1848,6 @@ class _Portal:
 
     # ---- 批量/单篇的权限调整（一个表单里同时支持勾选批量与单篇按钮）----
     async def _bulk(self, send, form: dict, admin: str, ip: str):
-        import config as C
         dids = [d for d in (self._multi.get("did") or []) if d]
         action = str(form.get("bulk") or "")
         one = str(form.get("one") or "")
@@ -2076,7 +2092,7 @@ class _Portal:
                 else:
                     days = form.get("for_days", "")
                     until = form.get("until", "")
-                    enabled = {"1": True, "0": False}.get(form.get("enabled", ""), None)
+                    enabled = {"1": True, "0": False}.get(form.get("enabled", ""))
                     new_name = (form.get("new_name") or person).strip() or person
                     try:
                         exp = ACC.expiry_to_ts(days, until)

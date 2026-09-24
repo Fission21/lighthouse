@@ -1,0 +1,52 @@
+[project]
+name = "lighthouse-mcp"
+version = "0.6.0"
+description = "把本地项目开成受控的 MCP 窗口给 AI 看：四道闸、脱敏、审计、写开关、受控资料库门户"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "诗人 & CC (Poet & CC)" }]
+keywords = ["mcp", "model-context-protocol", "agent", "security", "audit", "local-first"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Topic :: Security",
+]
+dependencies = ["mcp>=1.0"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/Fission21/lighthouse"
+Changelog = "https://github.com/Fission21/lighthouse/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 这是「用脚本跑的服务」，不是可导入的包：只把 core/ 作为脚本目录带进源码分发
+py-modules = []
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["demo", "*.local.json"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+  "E501",   # 行长由 formatter 管，注释里的中文说明不强行折行
+  "SIM108", # 三元表达式不是必须的：这里更看重可读性
+  "E702",   # 子命令注册区刻意一行一个（100+ 行，逐行展开反而更难对照）
+  "E402",   # CLI/服务在 import 之前要先设环境变量（LIGHTHOUSE_PY 等），是故意的
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试脚本里：一条断言一行（长行正常）、测试夹具要一直开着文件句柄（不能用 with）、
+# try/except/pass 用于模拟异常场景
+"tests/*" = ["E501", "B011", "SIM117", "SIM115", "SIM105"]

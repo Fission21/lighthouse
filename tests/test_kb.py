@@ -385,9 +385,8 @@ async def part_mcp(base_url: str, state: Path, zhang: dict):
 # ---------------------------------------------------------------- ④ 网页：申请 / 查进度 / 管理页
 def part_web(base_url: str, state: Path, admin_pw: str = ""):
     print("\n④ 网页：申请页 / 自助开通 / 查进度 / 管理页边界")
-    import kb_auth as AUTH
     import kb as KB
-    site = base_url.replace("/w-kb1-test", "")
+    import kb_auth as AUTH
     # 申请页要登录：赵六自己有个账号（开通这一步现在由维护者做）
     AUTH.new_account(state, "zhaoliu", role="member", person="赵六")
     _r, _pw = AUTH.reset_password(state, "zhaoliu", length=12)
@@ -493,7 +492,7 @@ def part_track(state: Path, env: dict, zhang: dict):
     print("\n⑤ 追踪：审计留痕 + 用量报表 + 新申请提醒")
     audit = state / "audit" / "kb1.jsonl"
     check("审计文件已生成", audit.is_file())
-    rows = [json.loads(l) for l in audit.read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in audit.read_text(encoding="utf-8").splitlines() if lv.strip()]
     _mgmt = ("kb_user_update", "kb_user_delete", "kb_rotate", "kb_grant", "kb_decision")
     mine = [r for r in rows if r.get("principal") == "张三" and r.get("tool") not in _mgmt]
     check("审计记到了「谁」（principal=张三）", bool(mine), f"{len(rows)} 条记录")
@@ -525,7 +524,10 @@ def part_track(state: Path, env: dict, zhang: dict):
 
 def part_download(site: str, state: Path, zhang: dict, lib_root: str):
     print("\n⑥ 同事直接拿文件：门户下载页 / 单篇 / 打包 / 限时签名链接")
-    import io, time as _t, zipfile
+    import io
+    import time as _t
+    import zipfile
+
     import kb as KB
     import kb_access as ACC
     import kb_download as DL
@@ -605,7 +607,7 @@ def part_download(site: str, state: Path, zhang: dict, lib_root: str):
     check("打包时越级的那篇被挡下（李四拿不到 L2）", st == 403 and "都没通过" in body, str(st))
 
     # 审计：下载行必须认得出人（门户路径没带 MCP 口令，最容易漏）
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     dl = [x for x in rows
           if x.get("tool") == "kb_download" and x.get("ok")
           and (x.get("args") or {}).get("doc_id") == did_tech
@@ -638,7 +640,7 @@ def part_download(site: str, state: Path, zhang: dict, lib_root: str):
     return link_test
 
 
-# ---------------------------------------------------------------- ⑦ 管理页管文件（主人要的网页操作）
+# ---------------------------------------------------------------- ⑦ 管理页管文件（网页上操作）
 async def part_admin(site: str, state: Path, lib: Path, zhang: dict):
     print("\n⑦ 管理页直接管文件：扫库 / 公开 / 改等级 / 下架 / 预览 / 一次全公开")
     import kb as KB
@@ -748,7 +750,7 @@ async def part_admin(site: str, state: Path, lib: Path, zhang: dict):
           st == 200 and did_xlsx not in (cat.get("docs") or {}) and (docs / "技术" / "表格自检.xlsx").is_file())
 
     # ⑩ 管理页上的操作都留痕（actor=admin）
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     for tool in ("kb_scan", "kb_approve", "kb_setlevel", "kb_revoke", "kb_forget"):
         hit = [r for r in rows if r.get("tool") == tool and r.get("actor") == "admin"]
         check(f"审计留痕：{tool}（actor=admin）", bool(hit), f"{len(rows)} 条记录")
@@ -901,7 +903,7 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
     check("按关键词搜：只列匹配的", "拓扑说明" in body and "上传表格" not in body)
 
     # ⑩ 审计：上传/入库/批量都留痕
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     up = [r for r in rows if r.get("tool") == "kb_upload_file"]
     check("审计留痕：上传的文件（含字节数、分类、等级）",
           bool(up) and up[-1].get("bytes", 0) > 0 and up[-1].get("actor") == "admin",
@@ -931,7 +933,7 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
           st == 200 and "本来就有、内容一模一样" in body, f"HTTP {st}")
     check("同一份文件再传一次：回执不说「已进待批」（什么都没变就照实说）",
           "没有新资料或内容变化" in body, body[:80])
-    n_docs = len((KB.load_catalog(state, "kb1")[0].get("docs") or {}))
+    n_docs = len(KB.load_catalog(state, "kb1")[0].get("docs") or {})
     e_rep = (KB.load_catalog(state, "kb1")[0].get("docs") or {}).get(did_rep) or {}
     check("同一份文件再传一次：条目数不变 + 原有等级和状态都没被悄悄改掉",
           e_rep.get("status") == "approved" and e_rep.get("level") == "L2-技术",
@@ -942,8 +944,8 @@ async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
 async def part_users(site: str, state: Path, zhang: dict):
     print("\n⑨ 同事管理页：改等级（多档）/ 有效期 / 部门备注 / 停用 / 换地址 / 改名 / 删除")
     import kb as KB
-    import kb_web as WEB
     import kb_access as ACC
+    import kb_web as WEB
 
     base = site + "/w-kb1-test"
     admin = WEB.ensure_admin_token(state)
@@ -1062,9 +1064,29 @@ async def part_users(site: str, state: Path, zhang: dict):
     check("用量看板仍能按人汇总", st == 200 and "按人" in body, str(st))
 
     # ⑩ 都留痕
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     for tool in ("kb_user_update", "kb_rotate", "kb_user_delete"):
         check(f"审计留痕：{tool}", any(r.get("tool") == tool and r.get("actor") == "admin" for r in rows))
+
+    # ⑫ 设计令牌与主题（配色规范：页面里不许写死颜色）
+    import theme as THEME
+    check("主题：三套配色都能生成 CSS 变量",
+          all("--brand:" in THEME.theme_css(n) for n in THEME.theme_names())
+          and len({THEME.theme_css(n) for n in THEME.theme_names()}) == 3)
+    check("主题：名字写错时退回默认（不白屏）",
+          THEME.theme_css("没这套") == THEME.theme_css(THEME.DEFAULT_THEME)
+          and THEME.resolve("乱写") == THEME.DEFAULT_THEME)
+    check("主题：老变量名还认（页面里 --blue/--green 那些）",
+          "--blue: var(--brand)" in THEME.theme_css("indigo"))
+    check("主题：间距/圆角/字号刻度都在",
+          all(v in THEME.theme_css("indigo") for v in ("--s3:", "--r3:", "--f3:", "--sh1:")))
+    st, body = http(f"{base}/admin?k={admin}")
+    check("页面用的是令牌（var(--brand)/var(--accent)），不再是写死的蓝色",
+          st == 200 and "var(--brand)" in body and "var(--accent)" in body and "#0a6cff" not in body)
+    rest = body[body.find("</style>"):]
+    check("样式块以外不出现硬编码颜色（新页面别破坏这条）",
+          re.search(r"#[0-9a-fA-F]{6}", rest) is None)
+    check("空状态有说明（不是光一行灰字）", st == 200 and 'class="empty"' in body)
 
     # ⑪ 界面：折叠 + 悬停提示 + 分页
     st, body = http(f"{base}/admin?k={admin}")
@@ -1129,8 +1151,8 @@ async def part_users(site: str, state: Path, zhang: dict):
 async def part_auth(site: str, state: Path, admin_pw: str):
     """登录：网页不再谁都能看；账号密码 + 签名 cookie；同事只看自己等级。"""
     print("\n⑩ 登录闸门：账号密码 / 会话 cookie / 同事只能看自己的")
-    import kb_auth as AUTH
     import kb_access as ACC
+    import kb_auth as AUTH
     base = site + "/w-kb1-test"
 
     # ---- 未登录：什么都看不到 ----
@@ -1145,6 +1167,13 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     check("登录页本身可访问，且带用户名/密码/记住我",
           st == 200 and 'name="user"' in body and 'name="pw"' in body and "记住我" in body, f"HTTP {st}")
 
+    # ---- 用户名不存在：必须干净报错（曾经这里引用了未定义的变量 → 直接 500）----
+    st, body = login(site + "/w-kb1-test", "根本没这个人", "whatever123")
+    check("用户名不存在 → 401 统一提示，不是 500（曾因变量写错炸过）",
+          st == 401 and "用户名或密码不对" in body, f"HTTP {st}")
+    check("用户名不存在也记一次 IP 失败（否则换假用户名就能绕过限速）",
+          any(k for k in (AUTH.load_users(state).get("_ip_locks") or {})), "没记上")
+
     # ---- 错密码 + 限速 ----
     st, body = login(site + "/w-kb1-test", "admin", "definitely-wrong")
     check("密码错 → 401 且统一提示（不暴露账号是否存在）",
@@ -1154,7 +1183,7 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = login(site + "/w-kb1-test", "admin", admin_pw)
     check("连错 5 次 → 锁定（正确的密码也先不让进）",
           st == 401 and "连错太多次" in body, body[:80])
-    AUTH.set_account(state, "admin", role="admin", password=admin_pw, person="主人")   # 解锁（等价于重置）
+    AUTH.set_account(state, "admin", role="admin", password=admin_pw, person="管理员")   # 解锁（等价于重置）
     st, body = login(site + "/w-kb1-test", "admin", admin_pw)
     check("重置后再登录 → 成功", st == 200 and "登录成功" in body, f"HTTP {st}")
     check("登录后拿到的是签名 cookie（HttpOnly/SameSite）",
@@ -1215,7 +1244,7 @@ async def part_auth(site: str, state: Path, admin_pw: str):
           st == 200 and "临时密码" in body and "重置" in body, body[:90])
 
     # ---- 审计 ----
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     check("审计里有登录成功", any(r.get("tool") == "portal_login" and r.get("ok") for r in rows))
     check("审计里有登录失败", any(r.get("tool") == "portal_login" and r.get("ok") is False for r in rows))
     check("审计里有登出", any(r.get("tool") == "portal_logout" for r in rows))
@@ -1227,10 +1256,10 @@ async def part_auth(site: str, state: Path, admin_pw: str):
 async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
     """邀请码：管理员发码、同事凭码注册，全程可追踪。"""
     print("\n⑪ 邀请码注册：发码 → 凭码注册 → 追踪到人")
-    import kb_auth as AUTH
-    import kb_access as ACC
-    import kb_invite as INV
     import kb as KB
+    import kb_access as ACC
+    import kb_auth as AUTH
+    import kb_invite as INV
 
     base = site + "/w-kb1-test"
     admin = None
@@ -1297,8 +1326,8 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
     check("用户名带空格 → 拒", st == 400 and "只能用字母和数字" in body, f"HTTP {st}")
 
     # ---- 正常注册 ----
-    okf = dict(code=rec["code"], name="注册测试员", dept="技术部", purpose="投标资料",
-           user="regtester", pw="Str0ngPass2026", pw2="Str0ngPass2026")
+    okf = {"code": rec["code"], "name": "注册测试员", "dept": "技术部", "purpose": "投标资料",
+           "user": "regtester", "pw": "Str0ngPass2026", "pw2": "Str0ngPass2026"}
     st, body = http(f"{base}/register", cookie="", data=okf)
     check("凭码注册成功 → 页面同时给地址和账号",
           st == 200 and "/kb-" in body and "regtester" in body, f"HTTP {st}")
@@ -1325,7 +1354,6 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
 
     # ---- 角色边界：新注册的同事只能看自己等级 ----
     login(base, "regtester", "Str0ngPass2026")
-    site_root = site
     st_a, body_a = http(f"{base}/admin")
     check("注册的同事登录后进不了管理页（并给一条退出换管理员的路）",
           st_a == 403 and "/logout?next=" in body_a, f"HTTP {st_a}")
@@ -1358,7 +1386,7 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
     check("过期的码注册不了", st == 400 and "已过期" in body, f"HTTP {st}")
 
     # ---- 审计 ----
-    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [json.loads(lv) for lv in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if lv.strip()]
     check("审计：生成邀请码留痕", any(r.get("tool") == "kb_invite_create" for r in rows))
     check("审计：用码注册留痕（成功与失败都有）",
           any(r.get("tool") == "portal_register" and r.get("ok") for r in rows)
@@ -1395,10 +1423,11 @@ async def main() -> int:
             print((tmp / "server.log").read_text()[-1200:])
             return 2
 
-        import config as C
         import kb_auth as AUTH
+
+        import config as C
         cfg = C.windows()["kb1"]
-        _arec, ADMINPW = AUTH.new_account(state, "admin", role="admin", person="主人")
+        _arec, ADMINPW = AUTH.new_account(state, "admin", role="admin", person="管理员")
         zhang = part_cli(env, state, cfg)
         await part_auth(base_url.replace("/w-kb1-test", ""), state, ADMINPW)
         await part_invite(base_url.replace("/w-kb1-test", ""), state, ADMINPW, lib)

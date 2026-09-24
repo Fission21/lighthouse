@@ -44,14 +44,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "core"))
-import config as C          # noqa: E402
-import kb as KB             # noqa: E402
+import kb as KB  # noqa: E402
 import kb_access as ACC
 import kb_auth as AUTH
-import kb_invite as INV     # noqa: E402
-import kb_ingest as ING     # noqa: E402
-import kb_usage as USAGE    # noqa: E402
-import kb_web as WEB        # noqa: E402
+import kb_ingest as ING  # noqa: E402
+import kb_invite as INV
+import kb_usage as USAGE  # noqa: E402
+import kb_web as WEB  # noqa: E402
+import theme as THEME  # noqa: E402
+
+import config as C  # noqa: E402
 
 CST = timezone(timedelta(hours=8))
 CLI = "bash lighthouse.sh"
@@ -112,7 +114,7 @@ def _minutes(spec: str) -> int | None:
         return SCOPE.parse_duration(spec)
     except ValueError as e:
         print(f"❌ {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 def _fmt_expire(minutes: int | None) -> str:
@@ -464,7 +466,7 @@ def cmd_passwd(a) -> int:
         return 0 if ok else 1
     if a.admin:
         user = (a.user or "admin").strip()
-        role, person = "admin", (a.person or "主人")
+        role, person = "admin", (a.person or "管理员")
     else:
         user = (a.user or "").strip()
         if not user:
@@ -514,6 +516,32 @@ def cmd_accounts(a) -> int:
               f"{('是' if r['locked'] else '否'):<6} "
               f"{(INV.fmt(r['last_login']) if r['last_login'] else '从未登录')}")
     print(f"\n共 {len(rows)} 个账号；管理页里每个同事行也能「开通账号 / 重置密码」。")
+    return 0
+
+
+def cmd_theme(a) -> int:
+    """看/换门户配色主题（indigo 墨蓝 / teal 松石绿 / paper 暖纸质）。
+
+    不带名字 = 看当前是哪套 + 列出可选；带名字 = 写进本机 windows.local.json 的
+    kb.portal.theme，重启窗口后生效（网页刷新即可看到）。
+    """
+    cfg, _root, _state = _win(a.window)
+    cur = THEME.resolve(((cfg.get("kb") or {}).get("portal") or {}).get("theme"))
+    if not a.name:
+        print(f"窗口 {a.window} 当前主题：{cur}（{THEME.THEMES[cur]['label']}）")
+        for n in THEME.theme_names():
+            mark = " ← 当前" if n == cur else ""
+            print(f"  {n:<8} {THEME.THEMES[n]['label']}{mark}")
+        print(f"\n换一套：bash lighthouse.sh kb theme {a.window} teal")
+        return 0
+    if not THEME.is_theme(a.name):
+        print(f"没有这套主题：{a.name}；可选：{'、'.join(THEME.theme_names())}")
+        return 2
+    if not C.window_set_option(a.window, "kb.portal.theme", a.name):
+        print(f"窗口 {a.window} 不在注册表里（先 kb init？）")
+        return 1
+    print(f"✅ 窗口 {a.window} 的主题已改成 {a.name}（{THEME.THEMES[a.name]['label']}）")
+    print(f"   重启窗口生效：launchctl kickstart -k gui/$(id -u)/com.lighthouse.window-{a.window}")
     return 0
 
 
@@ -759,7 +787,7 @@ def cmd_admin_url(a) -> int:
     base = _public_url(cfg, a.window)
     print("管理页（本机浏览器直接打开；可从手机访问时请保管好这条带管理令的地址）：")
     print(f"  {base}/admin?k={tok}")
-    print(f"申请页（可以发给同事）：")
+    print("申请页（可以发给同事）：")
     print(f"  {base}/request")
     return 0
 
@@ -821,6 +849,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)
     p = sub.add_parser("admin-url"); p.add_argument("window"); p.add_argument("--rotate", action="store_true"); p.set_defaults(fn=cmd_admin_url)
+    p = sub.add_parser("theme"); p.add_argument("window")
+    p.add_argument("name", nargs="?", default=None, help=f"主题名：{'、'.join(THEME.theme_names())}")
+    p.set_defaults(fn=cmd_theme)
     return ap
 
 

@@ -134,7 +134,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 228/228
+#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 288/288
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -195,6 +195,19 @@ bash lighthouse.sh publish                    # 生成隧道配置 + 重启 + �
 - **对方不吃 SSE？** `json-response <id> on` 让窗口用纯 JSON 回应（标准客户端两种都吃，默认 SSE）。
 
 > 一句话：**接本机 AI 不需要域名；接网页 AI 也不一定买——本机 IP、局域网 IP、Tailscale、ngrok 全是零成本路线。**
+
+## 换个配色（受控资料库门户）
+
+门户的颜色/间距/圆角都走同一套设计令牌（[`core/theme.py`](core/theme.py)），内置三套配色：
+
+```bash
+bash lighthouse.sh kb theme <窗口>              # 看当前是哪套、有哪些可选
+bash lighthouse.sh kb theme <窗口> teal         # 换成松石绿（还有 indigo 墨蓝、paper 暖纸质）
+bash lighthouse.sh restart <窗口>               # 重启后生效
+```
+
+写页面的规矩（不写死颜色、一个区块一个主按钮、给用户复制的链接必须完整）见
+[`docs/DESIGN.md`](docs/DESIGN.md)；参与开发见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## 日常命令
 

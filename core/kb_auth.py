@@ -8,7 +8,7 @@
 - 登录后发一个 **HMAC 签名的 cookie**（密钥在本机 0600 文件里），改一个字符就失效；
 - 会话有期限（默认 12 小时，可勾「记住我」30 天），过期自动作废；
 - 失败限速：同一 IP + 同一账号连错 5 次锁 10 分钟，防在线爆破；
-- 角色分 `admin`（主人）与 `member`（同事）；同事登录后只看得到自己等级范围的资料；
+- 角色分 `admin`（管理员）与 `member`（同事）；同事登录后只看得到自己等级范围的资料；
 - MCP 那条线（AI 客户端用的地址令牌）**不受影响**：机器不会登录，令牌还是令牌。
 
 账号与同事台账分开存（`portal-users.json`），免得把密码哈希混进同事名单。
@@ -22,7 +22,6 @@ import hmac
 import json
 import os
 import secrets
-import string
 import time
 from pathlib import Path
 
@@ -105,7 +104,7 @@ def get(state_root, user: str) -> dict | None:
 
 
 def set_account(state_root, user: str, *, role: str = "member", password: str | None = None,
-                person: str = "", note: str = "") -> "tuple[dict, str | None]":
+                person: str = "", note: str = "") -> tuple[dict, str | None]:
     """建账号或改属性。password=None 表示只改属性、不动密码。返回 (记录, 明文密码或 None)。"""
     user = (user or "").strip()
     if not user:
@@ -195,7 +194,8 @@ def verify_login(state_root, user: str, pw: str, ip: str = "-",
     if not rec or not rec.get("pw"):
         # 账号不存在也照样走一遍哈希，避免用响应时间试探账号是否存在
         verify_pw(pw or "", hash_pw("x"))
-        _bump_fail(data, state_root, key_ip, now)
+        _bump_fail(data, ip, now)          # 用户名不存在也要记一次失败（否则换个假用户名就能绕过 IP 锁定）
+        save_users(state_root, data)
         return False, "用户名或密码不对。", None
     if not verify_pw(pw or "", rec["pw"]):
         rec["fails"] = int(rec.get("fails") or 0) + 1
