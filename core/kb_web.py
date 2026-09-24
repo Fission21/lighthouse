@@ -25,7 +25,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 
 import kb as KB
 import kb_access as ACC
@@ -1044,12 +1044,27 @@ class _Portal:
         return await self._send(send, _page("请先登录", '<div class="warn">需要登录后才能用这个地址。</div>',
                                             self.base), 401)
 
+    def _fix_next(self, raw, default: str) -> str:
+        """把 next 归一化成站内路径：/admin 与 <base>/admin 都认，别的丢掉（防跳走）。"""
+        nxt = str(raw or "").strip()
+        if not nxt:
+            return default
+        if nxt.startswith(self.base):
+            return nxt
+        if nxt.startswith("/"):
+            return self.base + nxt
+        return default
+
     async def _auth_route(self, send, sub: str, method: str, form: dict, hdrs: dict, qs: dict, ip: str):
         if sub == "/logout":
             self.audit("portal_logout", {}, True,
                        {"actor": (self._sess or {}).get("user") or "-", "ip": ip})
-            return await self._send(send, _page("已退出", '<div class="ok">已退出登录。</div>'
-                                                            f'<p><a class="btn" href="{esc(self.base)}/login">'
+            raw = str((qs.get("next") or [""])[0] or "")
+            nxt = self._fix_next(raw, "") if raw else ""
+            link = self.base + "/login" + (f"?next={quote(nxt)}" if nxt else "")
+            who = (self._sess or {}).get("user") or "当前账号"
+            return await self._send(send, _page("已退出", f'<div class="ok">已退出登录（{esc(str(who))}）。</div>'
+                                                            f'<p><a class="btn" href="{esc(link)}">'
                                                             '重新登录</a></p>', self.base),
                                     200, cookie=AUTH.clear_cookie())
 
@@ -1060,9 +1075,7 @@ class _Portal:
                         '它会生成一个密码并只显示一次。</div>')
             else:
                 boot = ""
-            nxt = (qs.get("next") or [""])[0] or (self.base + "/request")
-            if not nxt.startswith(self.base):
-                nxt = self.base + "/request"
+            nxt = self._fix_next((qs.get("next") or [""])[0], self.base + "/request")
             return await self._send(send, page_login(self.base, nxt, boot))
 
         user = (form.get("user") or "").strip()
@@ -1073,9 +1086,7 @@ class _Portal:
             self.audit("portal_login", {"user": user}, False,
                        {"actor": user or "-", "ip": ip, "reason": why,
                         "ua": hdrs.get("user-agent", "")[:60]})
-            nxt = (form.get("next") or "").strip() or (self.base + "/request")
-            if not nxt.startswith(self.base):
-                nxt = self.base + "/request"
+            nxt = self._fix_next(form.get("next"), self.base + "/request")
             return await self._send(send, page_login(self.base, nxt, f'<div class="warn">{esc(why)}</div>',
                                                      user=user), 401)
         mins = AUTH.REMEMBER_MINUTES if remember else AUTH.SESSION_MINUTES
@@ -1083,10 +1094,8 @@ class _Portal:
                    {"actor": user, "person": rec.get("person") or "", "role": rec.get("role"),
                     "ip": ip, "levels": list(self.levels) if rec.get("role") == "admin" else [],
                     "ua": hdrs.get("user-agent", "")[:60]})
-        nxt = (form.get("next") or "").strip() or (self.base + ("/admin" if rec.get("role") == "admin"
-                                                                else "/files"))
-        if not nxt.startswith(self.base):
-            nxt = self.base + "/files"
+        nxt = self._fix_next(form.get("next"),
+                             self.base + ("/admin" if rec.get("role") == "admin" else "/files"))
         return await self._send(send, _page("登录成功", '<div class="ok">登录成功，正在进入…</div>'
                                           f'<p><a class="btn" href="{esc(nxt)}">继续</a></p>', self.base),
                                 200, cookie=AUTH.cookie_header(self.state_root, rec, minutes=mins,
@@ -1735,15 +1744,21 @@ class _Portal:
         tok_hint = (qs.get("k") or [""])[0] or (form.get("k") or "") or hdrs.get("x-admin-token", "")
         ok, why = self._admin_gate(scope, hdrs, {"k": [tok_hint]})
         if not ok:
+            extra = ""
             if self._sess and not self._is_admin_session():
-                why = (f"这是管理页面，只有维护者能进。要看资料去 {self.base}/files，"
-                       f"要申请权限去 {self.base}/request。")
+                why = (f"你现在是同事账号（{self._who_label()}）登录着，管理页面只有维护者能进。")
+                extra = (f'<p><a class="btn" href="{esc(self.base)}/logout?next='
+                         f'{esc(quote(sub or "/admin"))}">退出这个账号，用管理员登录</a>'
+                         f'<span class="hint" style="margin-left:8px">'
+                         f'（管理员用户名 admin，密码在部署机的 admin-password.txt）</span></p>'
+                         f'<p class="hint">只想看资料 → <a href="{esc(self.base)}/files">去资料页</a>；'
+                         f'要申请权限 → <a href="{esc(self.base)}/request">去申请</a></p>')
                 code = 403
             else:
                 code = 403 if ("公网" in why or "部署机" in why) else 401
             self.audit("portal_admin", {"path": sub}, False, {"reason": why, "ip": ip})
             return await self._send(send, _page("管理页无法访问",
-                                                f'<div class="warn">{esc(why)}</div>', self.base), code)
+                                                f'<div class="warn">{esc(why)}</div>{extra}', self.base), code)
         admin = ensure_admin_token(self.state_root)
 
         if sub == "/admin/usage" and method == "GET":

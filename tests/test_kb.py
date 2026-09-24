@@ -1104,8 +1104,8 @@ async def part_auth(site: str, state: Path, admin_pw: str):
     st, body = login(site + "/w-kb1-test", "logintester", pw2)
     check("同事也能登录（他自己的账号）", st == 200 and "登录成功" in body, f"HTTP {st}")
     st, body = http(f"{base}/admin")
-    check("同事登录后进不了管理页（说清是管理页面，不是让他重新登录）",
-          st == 403 and "只有维护者能进" in body, f"HTTP {st}")
+    check("同事登录后进不了管理页（说清是谁登录着 + 给出换成管理员的路）",
+          st == 403 and "用户" in body and "/logout?next=" in body, f"HTTP {st}")
     st, body = http(f"{base}/files")
     check("同事登录后能看资料页（只列他等级的）", st == 200 and "我的资料" in body, f"HTTP {st}")
     check("资料页里只有他有权限的等级", "L2-技术" not in body or "无权" in body, "")
@@ -1240,8 +1240,8 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
     login(base, "regtester", "Str0ngPass2026")
     site_root = site
     st_a, body_a = http(f"{base}/admin")
-    check("注册的同事登录后进不了管理页（并说清是管理页面，别让他以为掉线）",
-          st_a == 403 and "只有维护者能进" in body_a, f"HTTP {st_a}")
+    check("注册的同事登录后进不了管理页（并给一条退出换管理员的路）",
+          st_a == 403 and "/logout?next=" in body_a, f"HTTP {st_a}")
     st, body = http(f"{base}/files")
     check("注册的同事能看到资料页（自己等级内的）", st == 200 and "我的资料" in body, f"HTTP {st}")
     SESSION["cookie"] = ""
