@@ -1004,7 +1004,7 @@ async def part_folders(site: str, state: Path, lib: Path, zhang: dict):
     _dd = 'data-drop="归档 2026"'
     check("面板里出现文件夹行（可拖放 + 可设默认等级 + 可删）",
           _dd in body and "存默认等级" in body and "删除（进回收站）" in body,
-          "drop=%s 等级=%s 删=%s" % (_dd in body, "存默认等级" in body, "删除（进回收站）" in body))
+          f"drop={_dd in body} 等级={'存默认等级' in body} 删={'删除（进回收站）' in body}")
     st, body = http(f"{base}/admin/mkdir", data={"k": admin, "cur": "", "dir": "归档 2026"})
     check("同名文件夹再建 → 拒绝（不覆盖）", "已经有了" in body, body[:80])
     for bad in ("../逃逸", "/etc/绝对路径", ".隐藏", "a/b/c/d/e/f/g", "怪<名>"):
@@ -1123,6 +1123,66 @@ async def part_folders(site: str, state: Path, lib: Path, zhang: dict):
                            lambda s: call(s, "kb_list", {"folder": "技术"}))
     check("AI 侧 kb_list 支持按文件夹限定 + 带 folder 字段",
           "folder" in str(r) or "技术" in str(r), str(r)[:100])
+
+
+# ---------------------------------------------------------------- ⑭ 按「任务需求」归类建议
+def part_suggest(site: str, state: Path, lib: Path, env: dict):
+    print("\n⑭ 归类建议：文件夹 = 一个任务需求（不是按文件类型），AI 只提议、人来执行")
+    import kb as KB
+
+    docs = lib / "原始文档"
+    # 三篇服务于同一个任务（类型各不相同）+ 一篇无关的
+    for name, body in (("星火项目 需求说明书.md", "# 需求\n\n星火项目的需求。\n"),
+                       ("星火项目 报价单.md", "# 报价\n\n星火项目的报价。\n"),
+                       ("星火项目 资质材料.md", "# 资质\n\n星火项目的资质。\n"),
+                       ("孤零零的一份说明.md", "# 无关\n\n跟别的都不沾边。\n")):
+        (docs / name).write_text(body, encoding="utf-8")
+    out, rc = cli("kb", "scan", "kb1", env=env)
+    check("（准备）把 4 篇放进根目录并扫进台账",
+          rc == 0 and KB.doc_id("原始文档/星火项目 需求说明书.md") in
+          ((KB.load_catalog(state, "kb1")[0].get("docs")) or {}), out[-120:])
+
+    plan = lib.parent / "plan.json"
+    out, rc = cli("kb", "suggest", "kb1", "--write", str(plan), env=env)
+    check("kb suggest：按任务需求聚类（三篇共享「星火项目」→ 建议同一个文件夹）",
+          rc == 0 and "星火项目" in out and "没有动任何文件" in out, out[-200:])
+    import json as _json
+    moves = (_json.loads(plan.read_text(encoding="utf-8")).get("moves") or []) if plan.is_file() else []
+    titles = [m["title"] for m in moves]
+    check("建议里含那三篇（不同类型也能聚到一起）",
+          len(moves) == 3 and all(any(t in x for t in ("需求说明书", "报价单", "资质材料")) for x in titles),
+          str(titles))
+    check("跟谁都不沾边的那篇不被硬塞（宁可不建议）",
+          all("孤零零" not in x for x in titles), str(titles))
+    check("建议里不按文件类型造文件夹（没有「商务/技术/资质/公示」这种）",
+          all(m["to"] not in ("商务", "技术", "资质", "公示", "交付", "合同") for m in moves),
+          str([m["to"] for m in moves]))
+    check("每篇的「为什么」说清了共同标识",
+          all("星火项目" in m["why"] for m in moves), str([m["why"] for m in moves]))
+
+    out, rc = cli("kb", "apply", "kb1", str(plan), "--dry-run", env=env)
+    check("kb apply --dry-run：只演练，文件一动不动",
+          rc == 0 and (docs / "星火项目 报价单.md").is_file() and not (docs / "星火项目").exists(),
+          out[-120:])
+
+    out, rc = cli("kb", "apply", "kb1", str(plan), env=env)
+    cat, _ = KB.load_catalog(state, "kb1")
+    inside = [e for e in (cat.get("docs") or {}).values() if "星火项目/" in (e.get("path") or "")]
+    check("kb apply：三篇真的进了新文件夹（文件夹自动建好）",
+          rc == 0 and (docs / "星火项目").is_dir() and len(inside) == 3, out[-160:])
+    check("apply 后台账 path/doc_id 跟着换、状态保留",
+          all(e.get("status") == "pending" for e in inside)
+          and KB.doc_id("原始文档/星火项目/星火项目 报价单.md") in (cat.get("docs") or {}),
+          str([e.get("path") for e in inside]))
+    check("apply 留痕（actor=cli:apply）",
+          any(r.get("tool") == "kb_move" and str(r.get("actor")) == "cli:apply" for r in _audit_rows(state)))
+
+    # 已经在同名文件夹里的，不再重复建议（先把旧方案删掉，免得读到上一轮的文件）
+    plan.unlink(missing_ok=True)
+    out, rc = cli("kb", "suggest", "kb1", "--write", str(plan), env=env)
+    moves2 = (_json.loads(plan.read_text(encoding="utf-8")).get("moves") or []) if plan.is_file() else []
+    check("已经在对应文件夹里的篇目不再被建议（不来回折腾）",
+          rc == 0 and not moves2 and "没有可建议的归类" in out, out[-140:] + str([m["title"] for m in moves2]))
 
 
 def _audit_rows(state: Path) -> list[dict]:
@@ -1669,6 +1729,7 @@ async def main() -> int:
         await part_admin(site, state, lib, zhang)
         await part_upload(site, state, lib, zhang)
         await part_folders(site, state, lib, zhang)
+        part_suggest(site, state, lib, env)
         await part_users(site, state, zhang)
         part_track(state, env, zhang)
     finally:

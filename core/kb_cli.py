@@ -895,41 +895,100 @@ def cmd_trash(a) -> int:
 
 
 # 归类建议：文件名 → 目标文件夹的关键词表（人工可改）
-_SUGGEST_RULES = [
-    (("报价", "价格", "商务", "费用", "预算"), "商务"),
-    (("技术", "方案", "参数", "架构", "算法", "接口", "部署", "运维"), "技术"),
-    (("资质", "证书", "营业执照", "授权", "认证", "信用"), "资质"),
-    (("合同", "协议", "条款", "签署"), "合同"),
-    (("公示", "公告", "通知", "中标", "招标", "投标"), "公示"),
-    (("验收", "交付", "清单", "记录"), "交付"),
-]
+# 归类建议的准绳（用户 2026-09-24 定）：**文件夹 = 一个任务需求**（同一个项目/需求下的
+# 各种文件放一起，不管它们是什么类型），**不是按文件类型分**。所以这里找的线索是
+# 「共同的任务标识」（项目名、编号），而不是「这份文件是什么类型」。
+_SUGGEST_STOP = {
+    # 类型 / 状态 / 通用词 —— 这些不能当任务名（注意：**不含**「项目 / 需求 / 技术 / 商务」，
+    # 因为真实任务名里常带这几个字，比如「星火项目」「技术攻关」）
+    "报告", "方案", "说明", "说明书", "内容", "文件", "附件", "表格", "清单", "草稿", "定稿",
+    "填报", "已填报", "最终", "初稿", "版本", "模板", "汇总", "记录", "纪要", "通知", "公告",
+    "公示", "合同", "协议", "报价", "预算", "资质", "证书", "采购", "招标", "投标", "正式",
+    "扫描", "复印件", "原件", "副本", "文档", "资料", "材料", "相关", "有关", "其他", "补充",
+    "修订", "变更", "申请", "审批", "流程", "制度", "规范",
+}
+# 项目编号 / 任务代号：整段当成一个标识（别拆成 2026、HW、001 三截）
+_CODE_RE = re.compile(r"\d{4}[-_][A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*"
+                      r"|[A-Z]{2,}[-_]?\d{2,}(?:[-_]\d+)*")
+
+
+def _task_tokens(text: str) -> set[str]:
+    """从一个文件名里抽「可能是任务/项目名」的片段（剔掉类型词与年份）。"""
+    s = re.sub(r"[（(【\[].*?[)）】\]]", " ", text or "")          # 去掉括号里的备注
+    s = re.sub(r"\.(docx?|pdf|xlsx?|pptx?|txt|md|wps|zip)$", " ", s, flags=re.I)
+    out: set[str] = set(_CODE_RE.findall(s))                       # 编号/代号：整段留下
+    for seg in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", s):
+        if not seg:
+            continue
+        if re.fullmatch(r"[A-Za-z]{3,}|[0-9]{3,}", seg):
+            if seg.lower() not in _SUGGEST_STOP and not re.fullmatch(r"20\d\d", seg):
+                out.add(seg)                                       # 英文词 / 数字编号
+            continue
+        for n in range(3, min(7, len(seg)) + 1):                    # 中文 3–6 字的连续片段
+            for i in range(len(seg) - n + 1):
+                out.add(seg[i:i + n])
+    return {t for t in out if t and not _has_stop(t)}
+
+
+def _has_stop(tok: str) -> bool:
+    """片段里夹着类型/状态词（如「已填报草稿」「资质材料」）→ 不算任务名。"""
+    low = tok.lower()
+    return any(w in tok or w in low for w in _SUGGEST_STOP)
 
 
 def _suggest_moves(state: Path, wid: str, root: Path, docs_rel: str) -> list[dict]:
-    """按文件名给归类建议（只提议，不动文件）。已有同名文件夹优先，否则建议新建。"""
+    """按「任务需求」给归类建议（只提议，不动文件）。
+
+    线索优先级：① 文件名里出现了某个**已有文件夹名**（文件夹名就是任务名，最强）；
+    ② 若干篇**共享的任务片段**（项目名/编号）→ 建议用那个片段当文件夹名。
+    找不到共同任务标识的篇目**不瞎建议**（宁可不提，也不按文件类型硬塞）。
+    """
     cat, _ = KB.load_catalog(state, wid)
     docs = (cat or {}).get("docs") or {}
     dirs = FOLD.dirs_under(root, docs_rel)
     flat = {d.split("/")[-1]: d for d in dirs}
-    out = []
+    items = []
     for did, e in docs.items():
         if e.get("status") == "trashed":
             continue
-        here = FOLD.dir_of(e.get("path") or "", docs_rel)
-        title = (e.get("title") or "") + " " + Path(e.get("path") or "").name
-        want, why = "", ""
-        for words, folder in _SUGGEST_RULES:
-            hit = next((w for w in words if w in title), "")
-            if hit:
-                want, why = flat.get(folder, folder), f"文件名里有「{hit}」"
+        hay = ((e.get("title") or "") + " " + Path(e.get("path") or "").name).strip()
+        items.append((did, e, FOLD.dir_of(e.get("path") or "", docs_rel), hay))
+
+    want: dict[str, tuple[str, str]] = {}
+    # ① 已有文件夹名出现在文件名里 → 归到那个文件夹（最长名字优先）
+    for did, _e, here, hay in items:
+        for d in sorted(dirs, key=len, reverse=True):
+            nm = d.split("/")[-1]
+            if len(nm) >= 2 and nm in hay and d != here:
+                want[did] = (d, f"文件名里有已有文件夹名「{nm}」")
                 break
-        if not want:
-            m = re.search(r"20\d\d", title)
-            if m:
-                want, why = flat.get(m.group(0), m.group(0)), f"文件名里有年份 {m.group(0)}"
-        if want and want != here:
-            out.append({"doc_id": did, "title": e.get("title"), "from": here, "to": want,
-                        "why": why, "exists": want in dirs})
+    # ② 共享片段 = 任务标识（只在 ① 没命中的篇目上找）
+    tok_docs: dict[str, set[str]] = {}
+    for did, _e, _here, hay in items:
+        if did in want:
+            continue
+        for t in _task_tokens(hay):
+            tok_docs.setdefault(t, set()).add(did)
+    shared = {t: ds for t, ds in tok_docs.items() if len(ds) >= 2}
+    keep = [t for t in shared if not any(t != o and t in o and len(shared[o]) >= len(shared[t]) for o in shared)]
+    for did, _e, here, _hay in items:
+        if did in want or not keep:
+            continue
+        cands = [t for t in keep if did in shared[t]]
+        if not cands:
+            continue
+        # 最长（最具体）优先；同样长就选覆盖篇数多的
+        t = sorted(cands, key=lambda x: (-len(x), -len(shared[x])))[0]
+        folder = flat.get(t, t)
+        if folder != here:
+            want[did] = (folder, f"与另外 {len(shared[t]) - 1} 篇共享任务标识「{t}」")
+
+    out = []
+    for did, e, here, _hay in items:
+        hit = want.get(did)
+        if hit and hit[0] != here:
+            out.append({"doc_id": did, "title": e.get("title"), "from": here, "to": hit[0],
+                        "why": hit[1], "exists": hit[0] in dirs})
     return out
 
 
@@ -941,9 +1000,11 @@ def cmd_suggest(a) -> int:
     plan = {"window": a.window, "generated_at": KB.now_iso(), "docs_dir": str(root / docs_rel),
             "moves": moves}
     if not moves:
-        print("没有可建议的归类（都已在看起来合适的文件夹里，或文件名里没有线索）")
+        print("没有可建议的归类：没找到「共同的任务标识」（项目名/编号），"
+              "或都已经在对应的文件夹里了 —— 宁可不动，也不按文件类型硬塞")
         return 0
-    print(f"归类建议（{len(moves)} 条，**没有动任何文件**）\n")
+    print(f"按任务需求归类的建议（{len(moves)} 条，**没有动任何文件**）")
+    print("（文件夹 = 一个任务/需求，里面可以混着各种类型的文件；不是按文件类型分）\n")
     for m in moves:
         tag = "已有" if m["exists"] else "需新建"
         print(f"  {m['title'][:34]:<36} {m['from'] or '（根目录）':<16} → {m['to']:<16} [{tag}] {m['why']}")

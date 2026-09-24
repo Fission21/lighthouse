@@ -21,12 +21,11 @@ import json
 import re
 import secrets
 import shutil
-
-import kb_folder as FOLD
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import kb_download as DL  # 下载层：门户下载页 + 限时签名链接
+import kb_folder as FOLD
 
 CST = timezone(timedelta(hours=8))
 STATUSES = ("pending", "approved", "rejected", "unsupported", "trashed")
