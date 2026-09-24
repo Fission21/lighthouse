@@ -125,7 +125,8 @@ def build_env(tmp: Path):
                "portal": {"enabled": True, "public_levels": LEVELS,
                           "auto_approve_levels": ["L1-商务"], "admin_remote": False},
                "download": {"enabled": True, "original": True, "link_minutes": 15,
-                            "max_bundle_mb": 50}},
+                            "max_bundle_mb": 50},
+               "upload": {"enabled": True, "max_file_mb": 1, "max_total_mb": 2}},
     }}}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     conf = tmp / "config.json"
@@ -600,8 +601,10 @@ async def part_admin(site: str, state: Path, lib: Path, zhang: dict):
     (docs / "技术" / "表格自检.xlsx").write_bytes(b"PK\x03\x04 not-a-real-xlsx")
 
     st, body = http(f"{base}/admin?k={admin}")
-    check("带管理令打开管理页 → 200，且页面上有「资料」一节",
-          st == 200 and "资料（" in body and "扫描资料目录" in body, str(st))
+    check("带管理令打开管理页 → 200，且有上传区 + 扫描入口",
+          st == 200 and "添加资料" in body and "扫描资料目录" in body
+          and 'name="files"' in body and "webkitdirectory" in body, str(st))
+    check("上传区支持拖拽与批量操作栏", "拖到这里" in body and "批量定为" in body)
     check("页面上有资料目录路径", "原始文档" in body)
 
     # ① 扫库
@@ -701,6 +704,165 @@ async def part_admin(site: str, state: Path, lib: Path, zhang: dict):
     (docs / "技术" / "表格自检.xlsx").unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------- ⑧ 上传与批量定权限
+def http_multipart(url: str, fields: dict, files: list):
+    """files: [(表单字段名, 上传时的文件名(可带子目录), 字节)] —— 模拟浏览器/拖拽上传。"""
+    boundary = "----kbTestBoundary7d1c9f"
+    out = []
+    for k, v in fields.items():
+        out.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    for name, fname, data in files:
+        out.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+                    f'filename="{fname}"\r\nContent-Type: application/octet-stream\r\n\r\n').encode())
+        out.append(data)
+        out.append(b"\r\n")
+    out.append(f"--{boundary}--\r\n".encode())
+    body = b"".join(out)
+    req = Request(url, data=body,
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urlopen(req, timeout=30) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+async def part_upload(site: str, state: Path, lib: Path, zhang: dict):
+    print("\n⑧ 管理页上传（文件/文件夹/拖拽）与批量定权限")
+    import kb as KB
+    import kb_web as WEB
+
+    base = site + "/w-kb1-test"
+    admin = WEB.ensure_admin_token(state)
+    docs = lib / "原始文档"
+    docs.mkdir(parents=True, exist_ok=True)
+
+    # ① 单文件上传 → 进待批
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin,
+                              {"k": admin, "category": "技术", "level": "L2-技术", "after": "pending"},
+                              [("files", "上传自检.md", "# 上传自检\n\n第一份上传的资料。\n".encode())])
+    did1 = KB.doc_id("原始文档/技术/上传自检.md")
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("上传单个文件 → 落到资料目录里",
+          st == 200 and (docs / "技术" / "上传自检.md").is_file(), str(st))
+    check("上传后自动入库进待批（不用再点扫描）",
+          (cat["docs"].get(did1) or {}).get("status") == "pending", str((cat["docs"].get(did1) or {}).get("status")))
+    check("页面回执列出收下的文件", "已收下 1 个文件" in body and "上传自检.md" in body)
+
+    # ② 文件夹上传（文件名带子目录）
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin,
+                              {"k": admin, "category": "技术", "level": "L1-商务", "after": "publish"},
+                              [("files", "子方案/网络/拓扑说明.md", "# 拓扑说明\n\n子目录也要跟着建。\n".encode())])
+    did2 = KB.doc_id("原始文档/技术/子方案/网络/拓扑说明.md")
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("文件夹上传 → 子目录层级被保留",
+          (docs / "技术" / "子方案" / "网络" / "拓扑说明.md").is_file())
+    check("上传时选「直接公开」→ 当场就是 approved + 指定等级",
+          (cat["docs"].get(did2) or {}).get("status") == "approved"
+          and (cat["docs"].get(did2) or {}).get("level") == "L1-商务",
+          str(cat["docs"].get(did2) or {})[:90])
+
+    async def can_read(session, did):
+        return str(await call(session, "kb_read", {"doc_id": did}))
+    r = await with_session(f"{site}/kb-{zhang['token']}", lambda s: can_read(s, did2))
+    check("上传即公开的那篇，同事立刻能读到", "拓扑说明" in str(r), str(r)[:80])
+
+    # ③ 危险文件名：不许写到库外
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin, {"k": admin, "category": "", "level": "L1-商务"},
+                              [("files", "../../逃逸.md", "# 逃逸\n".encode())])
+    outside = (lib.parent / "逃逸.md")
+    check("上传带 ../ 的文件名 → 不会写到资料库外面",
+          not outside.exists() and not (lib / "逃逸.md").exists(), str(outside))
+    check("这种名字会被洗成库内安全名（回执里能看到）", "逃逸.md" in body, body[:120])
+
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin, {"k": admin, "category": "", "level": "L1-商务"},
+                              [("files", "/etc/passwd", b"root:x:0:0\n")])
+    leaked = (docs / "etc" / "passwd")
+    check("绝对路径上传 → 也只落在资料库内（不碰系统文件）",
+          leaked.is_file() and leaked.read_text() == "root:x:0:0\n", str(st))
+
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin, {"k": admin, "category": "技术", "level": "L1-商务"},
+                              [("files", ".隐藏文件", b"secret\n")])
+    check("隐藏文件（点开头）被拒", st == 200 and "隐藏文件不允许" in body, str(st))
+
+    # ④ 超过单文件上限
+    big = b"x" * (1024 * 1024 + 50 * 1024)      # 测试窗口上限设成 1MB
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin, {"k": admin, "category": "技术", "level": "L1-商务"},
+                              [("files", "太大.md", big)])
+    check("超过单文件上限 → 拒收并说明上限", "超过上限" in body, body[:140])
+    check("被拒的文件不会留在磁盘上", not (docs / "技术" / "太大.md").exists())
+
+    # ⑤ 不支持的类型 → 进台账但标 unsupported
+    st, body = http_multipart(f"{base}/admin/upload?k=" + admin, {"k": admin, "category": "技术", "level": "L1-商务"},
+                              [("files", "上传表格.xlsx", b"PK\x03\x04nope")])
+    did3 = KB.doc_id("原始文档/技术/上传表格.xlsx")
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("不支持的类型也收下但标成 unsupported（提示要人工转文本）",
+          (cat["docs"].get(did3) or {}).get("status") == "unsupported" and "类型不支持" in body)
+
+    # ⑥ 批量：勾选两篇 → 一次定等级公开
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "did": f"{did1}&did={did3}",
+                                                "bulk": "approve", "bulk_level": "L3-核心"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("批量公开：选中的都变成 approved",
+          (cat["docs"].get(did1) or {}).get("status") == "approved", str(st))
+    check("不支持的篇目不会被批量放行（会逐条报错）",
+          (cat["docs"].get(did3) or {}).get("status") == "unsupported" and "不能" in body, body[-160:])
+    check("批量结果有回执（完成几篇）", "已完成：公开 1 篇" in body, body[:120])
+
+    # ⑦ 批量改等级 / 下架 / 删条目
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "did": f"{did1}&did={did2}",
+                                                "bulk": "setlevel", "bulk_level": "L1-商务"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("批量改等级 → 两篇都变 L1-商务",
+          (cat["docs"].get(did1) or {}).get("level") == "L1-商务"
+          and (cat["docs"].get(did2) or {}).get("level") == "L1-商务")
+
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "did": did2, "bulk": "revoke"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("批量下架 → 回到待批", (cat["docs"].get(did2) or {}).get("status") == "pending")
+
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "bulk": "forget", "did": did1})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("批量删条目 → 台账里没了，文件还在",
+          did1 not in (cat.get("docs") or {}) and (docs / "技术" / "上传自检.md").is_file())
+
+    # ⑧ 单篇按钮（一行一个 did，带自己的等级）
+    st, body = http(f"{base}/admin/bulk", data={"k": admin, "one": f"{did2}@approve",
+                                                f"level_{did2}": "L2-技术"})
+    cat, _ = KB.load_catalog(state, "kb1")
+    check("单篇「公开」只作用于这一篇、用这一行选的等级",
+          (cat["docs"].get(did2) or {}).get("status") == "approved"
+          and (cat["docs"].get(did2) or {}).get("level") == "L2-技术")
+
+    # ⑨ 筛选（管理页按状态/关键词看）
+    st, body = http(f"{base}/admin?k={admin}&status=pending")
+    check("按状态筛选：只看待批", "上传自检" not in body and "资料清单" in body)
+    from urllib.parse import quote as _q
+    st, body = http(f"{base}/admin?k={admin}&q={_q('拓扑')}")
+    check("按关键词搜：只列匹配的", "拓扑说明" in body and "上传表格" not in body)
+
+    # ⑩ 审计：上传/入库/批量都留痕
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    up = [r for r in rows if r.get("tool") == "kb_upload_file"]
+    check("审计留痕：上传的文件（含字节数、分类、等级）",
+          bool(up) and up[-1].get("bytes", 0) > 0 and up[-1].get("actor") == "admin",
+          str(up[-1])[:90] if up else "无")
+    check("审计留痕：上传后自动入库（kb_scan by=upload）",
+          any(r.get("tool") == "kb_scan" and r.get("by") == "upload" for r in rows))
+    check("审计留痕：上传即公开（kb_approve via=upload）",
+          any(r.get("tool") == "kb_approve" and r.get("via") == "upload" for r in rows))
+    check("审计留痕：批量操作标了 batch",
+          any(r.get("tool") in ("kb_approve", "kb_setlevel") and r.get("batch") for r in rows))
+
+    # 清理
+    for f in ("上传自检.md", "上传表格.xlsx"):
+        (docs / "技术" / f).unlink(missing_ok=True)
+    import shutil as _sh
+    _sh.rmtree(docs / "技术" / "子方案", ignore_errors=True)
+    _sh.rmtree(docs / "etc", ignore_errors=True)
+
+
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
@@ -731,6 +893,7 @@ async def main() -> int:
         link_test = part_download(site, state, zhang, str(lib))
         await with_session(f"{site}/kb-{zhang['token']}", link_test)
         await part_admin(site, state, lib, zhang)
+        await part_upload(site, state, lib, zhang)
         part_track(state, env, zhang)
     finally:
         srv.terminate()
