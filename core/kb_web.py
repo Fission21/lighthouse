@@ -383,6 +383,28 @@ def page_status(base: str, rec: dict | None, err: str = "", address: str = "") -
     return _page("申请进度", body, base)
 
 
+def _copybtn(label: str, target: str) -> str:
+    """复制按钮。**必须给完整地址**：只给路径的话，页面上的「复制」会复制出半截链接
+    （主人 2026-09-24 报过这个）。拿不到完整地址时，在浏览器里用 location.origin 补全。
+
+    剪贴板 API 在「页面没聚焦」时会被拒（例如刚切回来），所以带一个 execCommand 兜底，
+    失败了也告诉用户「手动选中下面的链接」，而不是只说一句复制失败。
+    """
+    expr = repr(target) if target.startswith("http") else f"(location.origin + {target!r})"
+    js = (
+        f"const b=this,txt={expr};"
+        f"const back=()=>setTimeout(()=>{{b.textContent={label!r}}},1600);"
+        f"const done=ok=>{{b.textContent=ok?'已复制':'复制失败（请手动选中下面的链接）';back();}};"
+        f"const legacy=()=>{{try{{const t=document.createElement('textarea');t.value=txt;"
+        f"t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();"
+        f"const ok=document.execCommand('copy');t.remove();return ok;}}catch(e){{return false;}}}};"
+        f"if(navigator.clipboard&&navigator.clipboard.writeText){{"
+        f"navigator.clipboard.writeText(txt).then(()=>done(true),()=>done(legacy()));}}else{{done(legacy());}}"
+    )
+    return (f'<button type="button" class="tiny ghost" onclick="{html.escape(js, quote=True)}">'
+            f'{esc(label)}</button>')
+
+
 def _q(text: str) -> str:
     """小字提示的替身：一个「?」，鼠标移上去才显示说明。"""
     return f'<span class="q" title="{esc(text)}">?</span>'
@@ -414,7 +436,8 @@ def _pager(base: str, admin: str, key: str, page: int, pages: int, total: int, u
     return "".join(out)
 
 
-def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: list[str]) -> str:
+def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
+                     pub: str = "") -> str:
     """邀请码：生成 / 看状态 / 看谁用了 / 停用删除。注册的入口靠它把关。"""
     rows = INV.list_codes(state_root, wid)
     s = INV.summary(state_root, wid)
@@ -458,11 +481,13 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
         uses = r.get("uses") or []
         used = "<br>".join(f'{esc(u.get("person"))}　{esc(INV.fmt(u.get("at")))}'
                            f'　{esc(u.get("ip"))}' for u in uses) or "—"
-        link = f"{base}/register?c={r['code']}"
+        path = f"{base}/register?c={r['code']}"
+        link = (pub.rstrip("/") + path) if pub else path      # 完整地址，别给半截
         trs.append(f'''<tr>
 <td><code style="font-size:13px">{esc(r["code"])}</code>
   <div class="bar" style="background:transparent;border:0;padding:0;margin:4px 0 0">
-    <button type="button" class="tiny ghost" onclick="navigator.clipboard.writeText('{esc(link)}').then(()=>{{this.textContent='已复制'}},()=>{{}})">复制注册链接</button>
+    {_copybtn("复制注册链接", link)}
+    <span class="hint" style="word-break:break-all;display:block;margin-top:4px">{esc(link)}</span>
   </div>
   <span class="hint">可用 {len(uses)}/{int(r.get("max_uses") or 1)} 次</span></td>
 <td>{esc("、".join(r.get("levels") or []))}<br><span class="hint">{esc(r.get("note") or "")}</span></td>
@@ -484,7 +509,7 @@ def _invites_section(base: str, state_root: Path, wid: str, admin: str, levels: 
 
 
 def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list[str],
-                 page: int = 1, per: int = 8) -> str:
+                 page: int = 1, per: int = 8, pub: str = "") -> str:
     """已授权的同事：**默认只显示一行摘要，点「编辑」才展开**表单（等级/有效期/部门/停用/换址/删除/账号）。"""
     users = ACC.list_users(state_root, wid)
     if not users:
@@ -496,7 +521,7 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
     for u in users[(cur - 1) * per: cur * per]:
         person = u.get("person") or ""
         token = str(u.get("token") or "")
-        address = (base.split("/w-")[0] if "/w-" in base else "") + f"/kb-{token}"
+        address = ((pub.rstrip("/") if pub else "") + f"/kb-{token}")   # 必须带域名
         my_levels = list(u.get("levels") or [])
         lv_boxes = "".join(
             f'<label><input type="checkbox" name="levels" value="{esc(l)}"'
@@ -581,8 +606,7 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
     </div>
     <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">看地址</summary>
       <code style="display:block;margin:4px 0">{esc(address)}</code>
-      <button type="button" class="tiny ghost"
-        onclick="navigator.clipboard.writeText('{esc(address)}').then(()=>{{this.textContent='已复制'}},()=>{{}});">复制</button>
+      {_copybtn("复制地址", address)}
       {_q("这条地址等于他的口令，只发给他本人；换地址后旧地址立刻失效。")}
     </details>
   </form>
@@ -899,6 +923,7 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
                root: Path | None = None, docs_rel: str = "", q: dict | None = None,
                who: str = "") -> bytes:
     q = q or {}                       # 上传后的回执页不带查询串，这里要兜住 None
+    pub = f"https://{host}" if host else ""      # 给「复制」按钮用的完整地址前缀
     pend = KB.pending_requests(state_root, wid)
     prows = []
     for r in sorted(pend, key=lambda x: x.get("created_at") or ""):
@@ -940,9 +965,9 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 {ptable}
 
 <h2>已授权的同事（{len(ACC.list_users(state_root, wid))}）</h2>
-{_users_table(state_root, wid, admin, base, levels, page=_pnum("pg"))}
+{_users_table(state_root, wid, admin, base, levels, page=_pnum("pg"), pub=pub)}
 
-{_invites_section(base, state_root, wid, admin, levels)}
+{_invites_section(base, state_root, wid, admin, levels, pub)}
 
 <h2>直接发一条地址（不经申请）</h2>
 <form method="post" action="{esc(base)}/admin/grant">
@@ -1040,6 +1065,11 @@ class _Portal:
 
     def _address(self, token: str) -> str:
         return f"https://{self.host}/kb-{token}"
+
+    def _abs(self, path: str) -> str:
+        """把窗口内的路径补成完整地址：给用户看/复制的链接一律走这里，
+        否则页面上的链接只有半截（主人 2026-09-24 报过）。"""
+        return f"https://{self.host}{path}" if path.startswith("/") else path
 
     def _admin_net_block(self, scope, hdrs: dict) -> str:
         """管理页的网络层准入：不是部署机 / 公网但没开远程 → 返回原因（否则空串）。"""
@@ -1975,7 +2005,7 @@ class _Portal:
                            f'{"指定给 " + esc(rec["person"]) + "　·　" if rec.get("person") else ""}'
                            f'{esc(str(days))} 天内有效　·　可用 {max_uses} 次'
                            f'<br><span class="hint">把注册链接发给他：</span>'
-                           f'<br><code>{esc(self.base)}/register?c={esc(rec["code"])}</code></div>')
+                           f'<br><code>{esc(self._abs(self.base + "/register?c=" + rec["code"]))}</code></div>')
             elif act in ("revoke", "enable"):
                 done = INV.revoke(self.state_root, self.win.id, code, enabled=(act == "enable"))
                 self.audit("kb_invite_revoke", {"code": INV.pretty(code), "action": act}, done,

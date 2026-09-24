@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import json
 import os
 import re
@@ -1070,6 +1071,13 @@ async def part_users(site: str, state: Path, zhang: dict):
     check("同事是一行折叠卡（默认收起：点「编辑」才展开表单）",
           st == 200 and '<details class="ucard">' in body and 'class="caret"' in body
           and 'form class="box"' in body, f"HTTP {st}")
+    flat = _html.unescape(body)
+    check("同事地址给的是完整地址（带域名，不是半截路径）",
+          re.search(r'https://[^/\s"]+/kb-\S', flat) is not None)
+    check("「复制地址」复制的是完整地址（复制不全的坑）",
+          re.search(r"txt='https://[^']+/kb-", flat) is not None
+          and "navigator.clipboard.writeText(txt)" in flat)
+
     check("小字说明改成鼠标悬停提示（? 气泡带 title）",
           st == 200 and 'class="q" title=' in body)
     check("折叠卡默认不展开（没有 open 属性）", '<details class="ucard" open' not in body)
@@ -1239,6 +1247,12 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
                                                   "person": "注册测试员", "max_uses": "1",
                                                   "note": "XX 项目", "action": "create"})
     rec = INV.list_codes(state, "kb1")[0]
+    flat = _html.unescape(body)
+    check("管理页显示的注册链接是完整地址（带域名，不是半截）",
+          re.search(r'https://[^/\s"]+/w-[^/\s"]*/register\?c=', flat) is not None)
+    check("「复制注册链接」复制的是完整地址（复制不全的坑）",
+          re.search(r"txt='https://[^']+/w-[^']*/register\?c=", flat) is not None)
+
     check("生成邀请码：等级/指定给谁/有效期/备注都记下了",
           st == 200 and rec["levels"] == ["L2-技术"] and rec["person"] == "注册测试员"
           and rec["note"] == "XX 项目", f"HTTP {st}")
@@ -1246,6 +1260,9 @@ async def part_invite(site: str, state: Path, admin_pw: str, lib: Path):
           "-" in rec["code"] and rec["code"] == rec["code"].upper(), rec["code"])
     check("生成回执里给了注册链接（带码）",
           f"/register?c={rec['code']}" in body, body[:60])
+    check("生成回执里的链接也是完整地址（不是半截）",
+          re.search(r'https://[^/\s"<]+/w-[^/\s"<]*/register\?c=' + re.escape(rec["code"]),
+                    _html.unescape(body)) is not None)
 
     # ---- 注册页：不需要登录，但要码 ----
     st, body = http(f"{base}/register", cookie="")
