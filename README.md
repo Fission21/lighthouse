@@ -134,7 +134,7 @@ pip install mcp
 
 # 1) 起一个示例窗口，先把链路跑通（不需要公网）
 bash lighthouse.sh test            # 一键验收：起临时实例 → 跑五套测试 → 自动收拾
-#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 199/199
+#    ✅ 通用冒烟 13/13  ✅ 只读审计 46/46  ✅ 写开关 25/25  ✅ 提权 56/56  ✅ 加固 56/56  ✅ 受控资料库 228/228
 
 # 2) 给【你自己的项目】开一扇窗
 #    不指定范围时会【问你】要放多大 —— 范围由你定，它不做全开默认
@@ -218,6 +218,11 @@ bash lighthouse.sh deny <id>             # 收回全部提权
 bash lighthouse.sh kb scan <id> [--extract auto|none|mineru]   # 受控资料库：扫目录抽文本、登记待批
 bash lighthouse.sh kb edit <id> --name 张三 --levels "L1-商务,L2-技术" --days 90   # 改同事的等级/有效期/部门/备注
 bash lighthouse.sh kb rm   <id> --name 张三 --yes                # 彻底删掉一个同事（地址立即失效）
+
+# 网页门户要登录（账号密码 + 签名会话 cookie；MCP 那条线用地址令牌，不受影响）
+bash lighthouse.sh kb passwd <id> --admin                          # 给自己设管理员密码（只打印一次）
+bash lighthouse.sh kb passwd <id> --user zhangsan --person 张三     # 给同事开通网页账号
+bash lighthouse.sh kb accounts <id>                                # 列出网页账号
 bash lighthouse.sh kb approve <id> --all-pending --level L1-商务  # 按篇审批 + 定等级
 bash lighthouse.sh kb invite <id> --name 张三 --level "L2-技术" --out 张三-使用说明.md
 bash lighthouse.sh kb users <id>          # 谁在用、调用/被拒次数、最后活跃

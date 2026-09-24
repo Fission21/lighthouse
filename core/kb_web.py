@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, urlencode
 import kb as KB
 import kb_access as ACC
 import kb_download as DL
+import kb_auth as AUTH
 import kb_ingest as ING
 import kb_usage as USAGE
 
@@ -93,7 +94,8 @@ def _rate_ok(ip: str) -> bool:
     return True
 
 
-def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = False) -> bytes:
+def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = False,
+          who: str = "") -> bytes:
     """统一外壳：手机可用、卡片式、表格可横向滚动。
 
     wide=True 给管理页用（表格宽），其它页面保持窄栏读书式排版。
@@ -102,7 +104,15 @@ def _page(title: str, body: str, base: str, *, admin: str = "", wide: bool = Fal
     if admin:
         nav = (f'<nav><a href="{esc(base)}/request">申请页</a>'
                f'<a href="{esc(base)}/admin?k={esc(admin)}">管理页</a>'
-               f'<a href="{esc(base)}/admin/usage?k={esc(admin)}">用量</a></nav>')
+               f'<a href="{esc(base)}/admin/usage?k={esc(admin)}">用量</a>'
+               + (f'<a href="{esc(base)}/files">我的资料</a>' if who else "")
+               + (f'<span class="hint" style="margin-left:auto">{esc(who)}</span>'
+                  f'<a href="{esc(base)}/logout">退出</a>' if who else "") + '</nav>')
+    elif who:
+        nav = (f'<nav><a href="{esc(base)}/files">资料</a>'
+               f'<a href="{esc(base)}/request">申请</a>'
+               f'<span class="hint" style="margin-left:auto">{esc(who)}</span>'
+               f'<a href="{esc(base)}/logout">退出</a></nav>')
     width = "1180px" if wide else "760px"
     return f"""<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -210,7 +220,25 @@ def status_chip(status: str) -> str:
 
 
 # ---------------------------------------------------------------- 页面
-def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "") -> bytes:
+def page_login(base: str, nxt: str, msg: str = "", user: str = "") -> bytes:
+    body = f"""{msg}
+<p class="lead">这是一个内部资料库。请用**管理员给你的账号**登录；AI 助手那条线不受影响，
+继续用你那条专属地址就行。</p>
+<form method="post" action="{esc(base)}/login">
+  <input type="hidden" name="next" value="{esc(nxt)}">
+  <label>用户名</label><input name="user" maxlength="40" value="{esc(user)}" autofocus required>
+  <label>密码</label><input type="password" name="pw" required>
+  <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:400">
+    <input type="checkbox" name="remember" value="1" style="width:16px;height:16px"> 记住我（30 天）</label>
+  <button type="submit">登录</button>
+  <span class="hint" style="margin-left:8px">连错 5 次会锁 10 分钟</span>
+</form>
+<p class="hint">密码忘了？让维护者在这台机器上执行
+<code>bash lighthouse.sh kb passwd &lt;窗口&gt; --user 你的用户名</code> 重置（会生成新的临时密码）。</p>"""
+    return _page("登录", body, base)
+
+
+def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "", who: str = "") -> bytes:
     opts = "".join(f'<option value="{esc(l)}">{esc(l)}</option>' for l in levels)
     body = f"""<p class="lead">这是一个只读资料库。填写下面的申请，维护者审批通过后，
 你会拿到一条**属于你自己的访问地址**，把它填进你的 AI 助手（如 ChatGPT 连接器）就能用。</p>
@@ -234,7 +262,7 @@ def page_request(base: str, cfg_kb: dict, levels: list[str], msg: str = "") -> b
 <p class="hint" style="margin-top:16px">已经申请过？
 <a href="{esc(base)}/request/status">用「申请号 + 查询码」查进度 / 取地址</a>。</p>
 <p class="hint">看不到的资料就是没授权，需要更多请再提交一次申请并说明理由。</p>"""
-    return _page("申请访问招投标资料库", body, base)
+    return _page("申请访问招投标资料库", body, base, who=who)
 
 
 def page_submitted(base: str, rec: dict, address: str = "") -> bytes:
@@ -301,6 +329,13 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
         lv_boxes = "".join(
             f'<label><input type="checkbox" name="levels" value="{esc(l)}"'
             f'{" checked" if l in my_levels else ""}><span>{esc(l)}</span></label>' for l in levels)
+        acct = AUTH.get(state_root, person) or {}
+        acct_btn = "重置密码" if acct else "开通账号"
+        acct_drop = ('<button class="tiny ghost" name="action" value="drop" '
+                     'onclick="return confirm(`删掉这个账号？他的地址与资料权限不受影响。`)">删账号</button>'
+                     if acct else "")
+        acct_hint = ("已开通" + (f"（上次登录 {(str(acct.get('last_login'))[:10])}）" if acct.get("last_login") else "")
+                     if acct else "还没开通 —— 开通后会生成临时密码，只显示一次")
         state = u.get("enabled", True)
         exp = u.get("expires")
         cur_days = ""
@@ -356,6 +391,18 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
       复制</button>
     <span class="hint">（这条等于他的口令，只发给他本人）</span>
   </details>
+  <form method="post" action="{esc(base)}/admin/pass" style="margin-top:8px">
+    <input type="hidden" name="k" value="{esc(admin)}">
+    <input type="hidden" name="person" value="{esc(person)}">
+    <label style="font-weight:400">网页账号</label>
+    <input name="user" value="{esc(acct.get("user") or "")}" placeholder="给他一个用户名" maxlength="40"
+           style="margin:4px 0">
+    <div class="bar" style="background:transparent;border:0;padding:0;margin:0">
+      <button class="tiny" name="action" value="save">{acct_btn}</button>
+      {acct_drop}
+      <span class="hint">{esc(acct_hint)}</span>
+    </div>
+  </form>
 </td></tr>''')
     return ('<div class="wrap"><table><tr><th>同事</th><th>权限与资料</th><th>状态 / 地址</th></tr>'
             + "".join(rows) + "</table></div>"
@@ -364,7 +411,7 @@ def _users_table(state_root: Path, wid: str, admin: str, base: str, levels: list
 
 
 def page_files(base: str, person: str, levels: list[str], docs: list[dict], token: str,
-               dcfg: dict, msg: str = "") -> bytes:
+               dcfg: dict, msg: str = "", who: str = "") -> bytes:
     """同事的「我的资料」页：能用 AI 查，也能在这儿直接把文件拿走。"""
     rows = []
     for d in docs:
@@ -394,7 +441,7 @@ def page_files(base: str, person: str, levels: list[str], docs: list[dict], toke
 然后直接说「把《XX》的原件给我」，AI 会返回一条<b>限时下载链接</b>（默认 15 分钟）。
 两种方式都只读、都记在访问日志里。</p>
 <p class="hint">只读；你的地址可以随时被收回或更换。资料涉及项目信息，请勿外传。</p>"""
-    return _page("我的资料", body, base)
+    return _page("我的资料", body, base, who=who)
 
 
 def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
@@ -657,7 +704,8 @@ def _docs_panel(base: str, state_root: Path, wid: str, admin: str, levels: list[
 
 def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[str],
                host: str, msg: str = "", remote: bool = False,
-               root: Path | None = None, docs_rel: str = "", q: dict | None = None) -> bytes:
+               root: Path | None = None, docs_rel: str = "", q: dict | None = None,
+               who: str = "") -> bytes:
     pend = KB.pending_requests(state_root, wid)
     prows = []
     for r in sorted(pend, key=lambda x: x.get("created_at") or ""):
@@ -714,7 +762,7 @@ def page_admin(base: str, state_root: Path, wid: str, admin: str, levels: list[s
 　·　命令行等价：<code>bash lighthouse.sh kb usage &lt;窗口&gt;</code></p>
 <p class="hint">地址段（token）在本机 <code>~/.lighthouse/state/kb-users.json</code>，也可用
 <code>bash lighthouse.sh kb users &lt;窗口&gt; --show-token</code> 查看。</p>"""
-    return _page("资料库管理页", body, base, admin=admin, wide=True)
+    return _page("资料库管理页", body, base, admin=admin, wide=True, who=who)
 
 
 def page_usage(base: str, state_root: Path, wid: str, admin: str, by: str, days: int,
@@ -763,16 +811,27 @@ class _Portal:
         self.public_levels = _public_levels_from(cfg)
         self.auto_levels = _auto_levels_from(cfg)
         self.remote = _admin_remote_from(cfg)
+        self.public_request = bool((cfg.get("kb") or {}).get("portal", {}).get("allow_public_request", False))
         self._ip = "-"          # 每个请求进来时更新，供审计用
+        self._sess: dict | None = None   # 本次请求的登录会话（没登录 = None）
+        AUTH.ensure_secret(self.state_root)     # 会话签名密钥（没有就生成，0600）
         self._multi: dict = {}  # 本次请求的表单多值字段
         self._token = ""        # 本次请求里出现的地址段（下载页里的链接要用）
 
     # ---- 小工具 ----
-    async def _send(self, send, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8"):
-        await send({"type": "http.response.start", "status": status,
-                    "headers": [(b"content-type", ctype.encode()),
-                                (b"content-length", str(len(body)).encode()),
-                                (b"cache-control", b"no-store")]})
+    async def _send(self, send, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8",
+                    cookie: str | None = None, location: str | None = None):
+        hdrs = [(b"content-type", ctype.encode()),
+                (b"content-length", str(len(body)).encode()),
+                (b"cache-control", b"no-store"),
+                (b"x-frame-options", b"DENY"),                 # 防被别人套在 iframe 里钓鱼
+                (b"x-content-type-options", b"nosniff"),
+                (b"referrer-policy", b"no-referrer")]          # 别把带口令的地址泄露给外站
+        if cookie:
+            hdrs.append((b"set-cookie", cookie.encode()))
+        if location:
+            hdrs.append((b"location", location.encode()))
+        await send({"type": "http.response.start", "status": status, "headers": hdrs})
         await send({"type": "http.response.body", "body": body})
 
     def _redirect(self, base_path: str, q: str = "") -> bytes:
@@ -781,20 +840,149 @@ class _Portal:
     def _address(self, token: str) -> str:
         return f"https://{self.host}/kb-{token}"
 
-    def _admin_gate(self, scope, hdrs: dict, qs: dict) -> tuple[bool, str]:
-        """管理页门禁：① 是否允许从公网来 ② 是不是部署机本机 ③ 管理令对不对。"""
+    def _admin_net_block(self, scope, hdrs: dict) -> str:
+        """管理页的网络层准入：不是部署机 / 公网但没开远程 → 返回原因（否则空串）。"""
         proxied = bool(hdrs.get("cf-connecting-ip") or hdrs.get("x-forwarded-for"))
         ip = (scope.get("client") or ("-", 0))[0]
         if not proxied and ip not in ("127.0.0.1", "::1"):
-            return False, "管理页只允许在部署机上访问。"
+            return "管理页只允许在部署机上访问。"
         if proxied and not self.remote:
-            return False, ("管理页默认不开放给公网访问。要能从手机上看，"
-                           "请在窗口配置里把 kb.portal.admin_remote 设为 true（并保管好管理令）。")
+            return ("管理页默认不开放给公网访问。要能从手机上看，"
+                    "请在窗口配置里把 kb.portal.admin_remote 设为 true（并保管好管理令）。")
+        return ""
+
+    def _admin_gate(self, scope, hdrs: dict, qs: dict) -> tuple[bool, str]:
+        """管理页门禁：① 公网开关/本机限制 ② 管理员登录 **或** 管理令（两者之一）。
+
+        管理员登录 = 账号密码那套（推荐）；管理令 = 老链接与脚本兼容用。
+        """
+        why = self._admin_net_block(scope, hdrs)
+        if why:
+            return False, why
+        sess = self._sess if self._sess is not None else self._session(hdrs)
+        if sess and sess.get("role") == "admin":
+            return True, ""
         tok = (qs.get("k") or [""])[0] or hdrs.get("x-admin-token", "")
         want = ensure_admin_token(self.state_root)
-        if not want or not secrets.compare_digest(str(tok), str(want)):
-            return False, "管理令不对（或缺失）。本机执行 `bash lighthouse.sh kb admin-url <窗口>` 取地址。"
-        return True, ""
+        if want and tok and secrets.compare_digest(str(tok), str(want)):
+            return True, ""
+        if sess:
+            return False, "这个账号不是管理员，进不了管理页。"
+        if not AUTH.has_admin(self.state_root):
+            return False, ("还没有管理员账号。在部署机上执行 "
+                           f"`bash lighthouse.sh kb passwd {self.win.id} --admin` 生成管理员密码；"
+                           f"或者用管理令地址进入。")
+        return False, "请先用管理员账号登录（或带上管理令）。"
+
+    def _has_credential(self, scope, hdrs: dict, qs: dict, sub: str, method: str,
+                        body: bytes = b"") -> bool:
+        """没登录时，这一次请求自己带没带凭据？
+
+        - 管理令（?k= / x-admin-token）：等价于管理员身份，放行（老链接与脚本用）
+        - 地址令牌 / 签名链接 / 短地址段：机器与「直接拿文件」那条线，放行
+        - 申请页：只有显式打开 allow_public_request 才放行
+        其余（裸着来的网页）一律要求登录 —— 这就是「不再谁都能看」。
+        """
+        bform: dict = {}
+        if method == "POST" and body:
+            try:
+                bform = {k: v[0] for k, v in parse_qs(body.decode(errors="replace")).items()}
+            except Exception:                                                # noqa: BLE001
+                bform = {}
+        adm = (qs.get("k") or [""])[0] or bform.get("k", "") or hdrs.get("x-admin-token", "")
+        if sub in ("/zip",) or sub.startswith("/dl/"):
+            return True          # 下载/打包端点自己按「谁」判权限，没身份照样拒
+        want = ensure_admin_token(self.state_root, create=False)
+        if adm and want and secrets.compare_digest(str(adm), str(want)):
+            return True
+        principal = scope.get("kb_principal")
+        if isinstance(principal, dict) and principal.get("person"):
+            return True                                   # 走 /kb-<地址段> 进来的
+        if ((qs.get("t") or [""])[0] or (qs.get("s") or [""])[0] or (qs.get("p") or [""])[0]
+                or bform.get("t", "")):
+            return True                                   # 链接里带地址令牌或签名
+        if sub == "/request" and self.public_request:
+            return True
+        return False
+
+    def _who_label(self) -> str:
+        sess = self._sess if self._sess is not None else self._session({})
+        if not sess:
+            return ""
+        who = sess.get("person") or sess.get("user") or ""
+        return ("管理员 · " if sess.get("role") == "admin" else "") + str(who)
+
+    def _is_admin_session(self) -> bool:
+        return bool(self._sess and self._sess.get("role") == "admin")
+
+    # ---- 登录 / 登出 / 未登录跳转 ----
+    def _session(self, hdrs: dict) -> dict | None:
+        """从 cookie 里读登录态（验签 + 查过期 + 查账号是否还在）。"""
+        raw = hdrs.get("cookie", "") or ""
+        for bit in raw.split(";"):
+            k, _, v = bit.strip().partition("=")
+            if k == AUTH.COOKIE and v:
+                return AUTH.read_cookie(self.state_root, v)
+        return None
+
+    async def _need_login(self, send, sub: str, method: str):
+        """没登录：页面请求就跳到登录页，接口请求回 401。"""
+        if method == "GET" and sub in ("/request", "/files", "/admin", "/admin/usage", "/"):
+            nxt = self.base + sub
+            return await self._send(send, _page("请先登录", f'<div class="warn">这个页面需要登录。</div>'
+                                                    f'<p><a class="btn" href="{esc(self.base)}/login?next='
+                                                    f'{esc(nxt)}">去登录</a></p>', self.base), 401)
+        return await self._send(send, _page("请先登录", '<div class="warn">需要登录后才能用这个地址。</div>',
+                                            self.base), 401)
+
+    async def _auth_route(self, send, sub: str, method: str, form: dict, hdrs: dict, qs: dict, ip: str):
+        if sub == "/logout":
+            self.audit("portal_logout", {}, True,
+                       {"actor": (self._sess or {}).get("user") or "-", "ip": ip})
+            return await self._send(send, _page("已退出", '<div class="ok">已退出登录。</div>'
+                                                            f'<p><a class="btn" href="{esc(self.base)}/login">'
+                                                            '重新登录</a></p>', self.base),
+                                    200, cookie=AUTH.clear_cookie())
+
+        if method == "GET":
+            if not AUTH.has_admin(self.state_root):
+                boot = ('<div class="warn">还没有管理员账号。请在部署机上执行：<br><code>'
+                        'bash lighthouse.sh kb passwd ' + self.win.id + ' --admin</code><br>'
+                        '它会生成一个密码并只显示一次。</div>')
+            else:
+                boot = ""
+            nxt = (qs.get("next") or [""])[0] or (self.base + "/request")
+            if not nxt.startswith(self.base):
+                nxt = self.base + "/request"
+            return await self._send(send, page_login(self.base, nxt, boot))
+
+        user = (form.get("user") or "").strip()
+        pw = form.get("pw") or ""
+        remember = bool(form.get("remember"))
+        ok, why, rec = AUTH.verify_login(self.state_root, user, pw, ip)
+        if not ok:
+            self.audit("portal_login", {"user": user}, False,
+                       {"actor": user or "-", "ip": ip, "reason": why,
+                        "ua": hdrs.get("user-agent", "")[:60]})
+            nxt = (form.get("next") or "").strip() or (self.base + "/request")
+            if not nxt.startswith(self.base):
+                nxt = self.base + "/request"
+            return await self._send(send, page_login(self.base, nxt, f'<div class="warn">{esc(why)}</div>',
+                                                     user=user), 401)
+        mins = AUTH.REMEMBER_MINUTES if remember else AUTH.SESSION_MINUTES
+        self.audit("portal_login", {"user": user, "remember": remember}, True,
+                   {"actor": user, "person": rec.get("person") or "", "role": rec.get("role"),
+                    "ip": ip, "levels": list(self.levels) if rec.get("role") == "admin" else [],
+                    "ua": hdrs.get("user-agent", "")[:60]})
+        nxt = (form.get("next") or "").strip() or (self.base + ("/admin" if rec.get("role") == "admin"
+                                                                else "/files"))
+        if not nxt.startswith(self.base):
+            nxt = self.base + "/files"
+        return await self._send(send, _page("登录成功", '<div class="ok">登录成功，正在进入…</div>'
+                                          f'<p><a class="btn" href="{esc(nxt)}">继续</a></p>', self.base),
+                                200, cookie=AUTH.cookie_header(self.state_root, rec, minutes=mins,
+                                                               secure=bool(hdrs.get("cf-connecting-ip")
+                                                                           or hdrs.get("x-forwarded-for"))))
 
     # ---- 主入口 ----
     async def __call__(self, scope, receive, send):
@@ -814,14 +1002,51 @@ class _Portal:
         # ⚠️ MCP 客户端 POST 的正是「窗口路径本身」。除了下面这几个网页路由，
         #    其余一切（含窗口路径本体）原样交给 MCP —— 绝不去读它的请求体。
         portal_routes = {"/request", "/request/status", "/admin", "/admin/usage", "/files", "/zip",
+                         "/login", "/logout",
                          "/admin/decide", "/admin/grant", "/admin/revoke", "/admin/rotate",
                          "/admin/scan", "/admin/doc", "/admin/upload", "/admin/bulk",
-                         "/admin/user", "/healthz"}
+                         "/admin/user", "/admin/pass", "/healthz"}
         if sub not in portal_routes and not sub.startswith("/dl/"):
             accept = hdrs.get("accept", "")
             if sub in ("", "/") and method == "GET" and "text/html" in accept and "text/event-stream" not in accept:
                 return await self._send(send, self._redirect(f"{self.base}/request"))
             return await self.app(scope, receive, send)
+
+        # ---------- 登录闸门：网页门户一律要登录（MCP 那条线不受影响，见上面的分流）----------
+        # 表单 POST 的凭据在 body 里（k= / t=），所以先把体读下来缓冲，再「重放」给后续处理
+        replay = receive
+        bodybuf = b""
+        if method == "POST" and sub != "/admin/upload":
+            more = True
+            while more:
+                _m = await receive()
+                bodybuf += _m.get("body", b"")
+                more = _m.get("more_body", False)
+
+            async def replay():                                        # noqa: E306
+                return {"type": "http.request", "body": bodybuf, "more_body": False}
+            receive = replay
+        self._sess = self._session(hdrs)
+        if sub in ("/login", "/logout"):
+            lform: dict = {}
+            if method == "POST":
+                lbody = b""
+                more = True
+                while more:
+                    msg = await receive()
+                    lbody += msg.get("body", b"")
+                    more = msg.get("more_body", False)
+                lform = {k: v[0] for k, v in parse_qs(lbody.decode(errors="replace")).items()}
+            return await self._auth_route(send, sub, method, lform, hdrs, qs, ip)
+        if not self._sess and not self._has_credential(scope, hdrs, qs, sub, method, bodybuf):
+            if sub.startswith("/admin"):
+                why = self._admin_net_block(scope, hdrs)      # 公网开关/非部署机 → 先说清楚
+                if why:
+                    self.audit("portal_admin", {"path": sub}, False, {"reason": why, "ip": ip})
+                    return await self._send(send, _page("管理页无法访问",
+                                                        f'<div class="warn">{esc(why)}</div>', self.base),
+                                            403 if "公网" in why else 401)
+            return await self._need_login(send, sub, method)
 
         # 上传是 multipart，必须拿原始请求体自己解析（不能像普通表单那样先读成 dict）
         if sub == "/admin/upload" and method == "POST":
@@ -849,7 +1074,8 @@ class _Portal:
         try:
             if sub == "/request":
                 if method == "GET":
-                    return await self._send(send, page_request(self.base, self.cfg, self.public_levels))
+                    return await self._send(send, page_request(self.base, self.cfg, self.public_levels,
+                                                               who=self._who_label()))
                 return await self._submit(send, form, ip)
             if sub == "/request/status":
                 return await self._status(send, qs)
@@ -869,6 +1095,19 @@ class _Portal:
         if isinstance(p, dict) and p.get("person"):
             self._token = str(p.get("token") or "")
             return p["person"], list(p.get("levels") or []), ""
+        sess = self._sess if self._sess is not None else self._session({})
+        if sess:
+            if sess.get("role") == "admin":
+                self._token = ""
+                return "维护者(登录)", list(self.levels), ""
+            who = sess.get("person") or sess.get("user") or ""
+            rec2 = ACC.get_user(self.state_root, self.win.id, who) if who else None
+            if rec2:
+                if not rec2.get("enabled", True):
+                    return "", [], "你的账号已被停用，请联系维护者。"
+                self._token = str(rec2.get("token") or "")
+                return who, list(rec2.get("levels") or []), ""
+            return "", [], f"这个账号（{who}）还没有分配资料等级，请联系维护者。"
         tok = (qs.get("t") or [""])[0] or ((form or {}).get("t") or "")
         if tok:
             rec, err = ACC.check_token(self.state_root, self.win.id, tok)
@@ -908,7 +1147,8 @@ class _Portal:
     async def _download(self, scope, send, qs: dict, form: dict, sub: str):
         # 管理令（管理页里的「看原件」）：维护者预览用，等级放开，审计记成「维护者(管理令)」
         adm = (qs.get("k") or [""])[0] or (form.get("k") or "")
-        admin_preview = bool(adm) and adm == ensure_admin_token(self.state_root, create=False)
+        admin_preview = (bool(adm) and adm == ensure_admin_token(self.state_root, create=False)) \
+            or self._is_admin_session()
         sp, sexp, ssig = self._signed_parts(qs)
         signed = False
         if admin_preview:
@@ -951,7 +1191,7 @@ class _Portal:
                                         self.win.check, levels)]
             tok = (qs.get("t") or [""])[0] or self._token
             self.audit("kb_files", {"count": len(docs)}, True, {"person": person, "levels": levels, "ip": self._ip, "admin": admin_preview})
-            return await self._send(send, page_files(self.base, person, levels, docs, tok, dcfg))
+            return await self._send(send, page_files(self.base, person, levels, docs, tok, dcfg, who=self._who_label()))
 
         # ② 单篇下载
         if sub.startswith("/dl/"):
@@ -1032,6 +1272,10 @@ class _Portal:
         if (form.get("website") or "").strip():          # 蜜罐：只有机器人会填
             return await self._send(send, _page("已忽略", '<div class="warn">提交未通过校验。</div>', self.base), 400)
         name = (form.get("name") or "").strip()
+        if self._sess and self._sess.get("role") != "admin":
+            who = self._sess.get("person") or self._sess.get("user") or ""
+            if who:
+                name = who                      # 同事只能以本人名义申请
         purpose = (form.get("purpose") or "").strip()
         level = (form.get("level_requested") or "").strip()
         if not name or not purpose:
@@ -1100,6 +1344,11 @@ class _Portal:
         from starlette.datastructures import Headers
         from starlette.formparsers import MultiPartParser
 
+        hdrs = {k.decode().lower(): v.decode(errors="replace") for k, v in scope.get("headers", [])}
+        ctype = hdrs.get("content-type", "")
+        clen = hdrs.get("content-length", "?")
+        trace = {"ct": ctype.split(";")[0], "len": clen, "ua": hdrs.get("user-agent", "")[:60]}
+
         ucfg = (self.cfg.get("kb") or {}).get("upload") or {}
         if ucfg.get("enabled") is False:
             self.audit("kb_upload", {}, False, {"reason": "上传未开启", "actor": "admin", "ip": ip})
@@ -1128,6 +1377,9 @@ class _Portal:
         except Exception as e:                                                   # noqa: BLE001
             self.audit("kb_upload", {}, False, {"reason": f"{e.__class__.__name__}: {e}",
                                                 "actor": "admin", "ip": ip})
+            trace["outcome"] = f"解析失败 {e.__class__.__name__}"
+            self.audit("kb_upload", trace, False, {"actor": "admin", "ip": ip})
+            print(f"[upload] ⛔ {trace}", flush=True)
             return await self._send(send, _page("上传失败", f'<div class="warn">解析上传内容出错：{esc(e)}</div>',
                                                 self.base), 400)
         try:
@@ -1138,7 +1390,11 @@ class _Portal:
             if level not in self.levels:
                 level = self.levels[0]
             files = [f for f in form.getlist("files") if getattr(f, "filename", "")]
+            trace.update(files=len(files), names=[f.filename for f in files[:5]])
             if not files:
+                trace["outcome"] = "没有文件"
+                self.audit("kb_upload", trace, False, {"actor": "admin", "ip": ip})
+                print(f"[upload] ⛔ {trace}", flush=True)
                 return await self._send(send, _page("没有文件", '<div class="warn">这次没有选中任何文件。</div>'
                                                     '<p><a href="' + esc(self.base) + "/admin?k=" + esc(admin)
                                                     + '">返回管理页</a></p>', self.base), 400)
@@ -1202,6 +1458,10 @@ class _Portal:
                     published += 1
                 except (ValueError, RuntimeError) as e:                            # noqa: PERF203
                     bad.append(str(e))
+        trace.update(saved=len(saved), bytes=total, after=after,
+                     reasons=[x[:70] for x in lines if x.startswith("⛔")][:5])
+        self.audit("kb_upload", trace, bool(saved), {"actor": "admin", "ip": ip})
+        print(f"[upload] {'✅' if saved else '⛔'} {trace}", flush=True)
         msg = ('<div class="ok"><b>已收下 ' + str(len(saved)) + " 个文件</b>（"
                + str(round(total / 1048576, 2)) + " MB）"
                + ("，其中 <b>" + str(published) + "</b> 篇已按 " + esc(level) + " 公开（同事现在就能看/能下）"
@@ -1213,7 +1473,8 @@ class _Portal:
                   + " · 未变 " + str(res["same"]) + " · 类型不支持 " + str(res["skipped"]) + "</p>"))
         return await self._send(send, page_admin(self.base, self.state_root, self.win.id, admin,
                                                  self.levels, self.host, msg, remote=self.remote,
-                                                 root=self.win.root, docs_rel=docs_rel))
+                                                 root=self.win.root, docs_rel=docs_rel,
+                                                 who=self._who_label()))
 
     # ---- 批量/单篇的权限调整（一个表单里同时支持勾选批量与单篇按钮）----
     async def _bulk(self, send, form: dict, admin: str, ip: str):
@@ -1294,7 +1555,7 @@ class _Portal:
         if sub == "/admin" and method == "GET":
             return await self._send(send, page_admin(
                 self.base, self.state_root, self.win.id, admin, self.levels, self.host,
-                remote=self.remote, root=self.win.root, q=qs,
+                remote=self.remote, root=self.win.root, q=qs, who=self._who_label(),
                 docs_rel=(self.cfg.get("kb") or {}).get("docs_dir") or "原始文档"))
         if method != "POST":
             return await self._send(send, _page("没有这个页面", '<p class="lead">没有这个页面。</p>', self.base), 404)
@@ -1355,6 +1616,37 @@ class _Portal:
                 msg = f'<div class="ok">已{"恢复" if enabled else "停用"} {esc(person)} 的地址。</div>'
             else:
                 msg = '<div class="warn">找不到这个人。</div>'
+        elif sub == "/admin/pass":
+            person = (form.get("person") or "").strip()
+            act = form.get("action") or "save"
+            user = (form.get("user") or "").strip() or person
+            if not person:
+                msg = '<div class="warn">没指定同事。</div>'
+            elif act == "drop":
+                done = AUTH.delete_account(self.state_root, user)
+                self.audit("kb_account", {"user": user, "action": "delete"}, done,
+                           {"person": person, "actor": "admin", "ip": ip})
+                msg = (f'<div class="ok">已删掉账号 <b>{esc(user)}</b>（他的地址与资料权限不受影响）。</div>'
+                       if done else '<div class="warn">没这个账号。</div>')
+            else:
+                rec = AUTH.get(self.state_root, user)
+                try:
+                    if rec:
+                        _rec, pw = AUTH.reset_password(self.state_root, user)
+                        act_word = "重置"
+                    else:
+                        _rec, pw = AUTH.new_account(self.state_root, user, role="member", person=person)
+                        act_word = "开通"
+                except ValueError as e:
+                    pw, msg = None, f'<div class="warn">⛔ {esc(str(e))}</div>'
+                if pw:
+                    self.audit("kb_account", {"user": user, "action": act_word, "person": person}, True,
+                               {"person": person, "actor": "admin", "ip": ip})
+                    msg = (f'<div class="ok">✅ 已{act_word} <b>{esc(person)}</b> 的网页账号。'
+                           f'<br>用户名 <code>{esc(user)}</code>　临时密码 '
+                           f'<code style="font-size:15px">{esc(pw)}</code>'
+                           f'<br><span class="hint">这串密码只显示这一次，请复制给他：'
+                           f'登录 {esc(self.base)}/login，登录后能看到属于他等级的资料。</span></div>')
         elif sub == "/admin/user":
             person = (form.get("person") or "").strip()
             act = form.get("action") or "save"

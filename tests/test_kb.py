@@ -18,6 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from mcp import ClientSession
@@ -62,18 +63,46 @@ async def call(session, name: str, args: dict) -> dict:
         return {"raw": text}
 
 
-def http(url: str, data: dict | None = None, headers: dict | None = None) -> tuple[int, str]:
+SESSION = {"cookie": ""}          # 测试里登录后的会话（后续请求默认带上）
+
+
+def http(url: str, data: dict | None = None, headers: dict | None = None,
+         cookie=None, timeout: int = 15) -> tuple[int, str]:
+    """cookie=None → 用当前会话；cookie="" → 明确不带（测未登录）。"""
     body = None
     hdrs = dict(headers or {})
     if data is not None:
         body = "&".join(f"{k}={v}" for k, v in data.items()).encode()
         hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+    ck = SESSION["cookie"] if cookie is None else cookie
+    if os.environ.get("KB_DEBUG"):
+        print(f"   ·[http] {url.split('/w-')[-1][:60]} cookie={('[默认]' + ck[:14]) if ck else '(无)'}")
+    if ck:
+        hdrs["Cookie"] = ck
     req = Request(url, data=body, headers=hdrs)
     try:
-        with urlopen(req, timeout=15) as r:
+        with urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", errors="replace")
     except HTTPError as e:
         return e.code, e.read().decode("utf-8", errors="replace")
+
+
+def login(base_url: str, user: str, pw: str, remember: bool = False) -> tuple[int, str]:
+    """登录，并把会话 cookie 记为默认（之后所有 http() 都带上）。"""
+    body = f"user={quote(user)}&pw={quote(pw)}&next={quote(base_url.rstrip('/') + '/admin')}"
+    if remember:
+        body += "&remember=1"
+    req = Request(base_url + "/login", data=body.encode(),
+                  headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urlopen(req, timeout=15) as r:
+            st, txt, hd = r.status, r.read().decode("utf-8", errors="replace"), r.headers
+    except HTTPError as e:
+        st, txt, hd = e.code, e.read().decode("utf-8", errors="replace"), e.headers
+    raw = hd.get("Set-Cookie") or ""
+    if raw:
+        SESSION["cookie"] = raw.split(";")[0]
+    return st, txt
 
 
 def http_bytes(url: str, data: dict | None = None, headers: dict | None = None) -> tuple[int, bytes, dict]:
@@ -352,8 +381,25 @@ async def part_mcp(base_url: str, state: Path, zhang: dict):
 
 
 # ---------------------------------------------------------------- ④ 网页：申请 / 查进度 / 管理页
-def part_web(base_url: str, state: Path):
+def part_web(base_url: str, state: Path, admin_pw: str = ""):
     print("\n④ 网页：申请页 / 自助开通 / 查进度 / 管理页边界")
+    import kb_auth as AUTH
+    import kb as KB
+    site = base_url.replace("/w-kb1-test", "")
+    # 申请页要登录：赵六自己有个账号（开通这一步现在由维护者做）
+    AUTH.new_account(state, "zhaoliu", role="member", person="赵六")
+    _r, _pw = AUTH.reset_password(state, "zhaoliu", length=12)
+    login(base_url, "zhaoliu", _pw)
+    st, body = http(f"{base_url}/request")
+    check("同事登录后申请页可打开（看得到自己的身份）", st == 200 and "赵六" in body, f"HTTP {st}")
+    http(f"{base_url}/request", data={"name": "张三三", "dept": "冒名", "level_requested": "L1-商务",
+                                      "purpose": "试试别人的名字", "contact": "", "website": ""})
+    _d, _ = KB.load_requests(state, "kb1")
+    check("同事申请不能顶别人的名字（姓名字段被忽略）",
+          any(r["name"] == "赵六" and r.get("dept") == "冒名" for r in _d["requests"].values()),
+          str([r["name"] for r in _d["requests"].values()]))
+    login(base_url, "admin", admin_pw)          # 后面的申请流程用管理员身份（可代填姓名）
+    _keep_session = SESSION["cookie"]           # 段末要清掉：后面的段测的是匿名/地址边界
     req_url = f"{base_url}/request"
     st, body = http(req_url)
     check("申请页可打开", st == 200 and "name=\"purpose\"" in body, str(st))
@@ -376,7 +422,8 @@ def part_web(base_url: str, state: Path):
     check("技术档申请 → 待批（给申请号+查询码）", st == 200 and "查询码" in body and "等维护者审批" in body, str(st))
     import kb as KB
     data, _ = KB.load_requests(state, "kb1")
-    zhao = next(r for r in data["requests"].values() if r["name"] == "赵六")
+    zhao = next(r for r in data["requests"].values()
+                if r["name"] == "赵六" and r.get("level_requested") == "L2-技术")
     check("申请记录里状态是 pending", zhao["status"] == "pending")
 
     # 蜜罐 / 等级白名单
@@ -402,10 +449,10 @@ def part_web(base_url: str, state: Path):
 
     # 管理页边界
     admin = __import__("kb_web").ensure_admin_token(state)
-    st, _ = http(f"{base_url}/admin", headers={"CF-Connecting-IP": "1.2.3.4"})
+    st, _ = http(f"{base_url}/admin", headers={"CF-Connecting-IP": "1.2.3.4"}, cookie="")
     check("带云端转发头访问管理页 → 403（公网打不到）", st == 403, str(st))
-    st, _ = http(f"{base_url}/admin")
-    check("本机但无管理令 → 401", st == 401, str(st))
+    st, _ = http(f"{base_url}/admin", cookie="")
+    check("本机但无管理令、也没登录 → 401", st == 401, str(st))
     st, body = http(f"{base_url}/admin?k={admin}")
     check("本机 + 管理令 → 管理页打开", st == 200 and "待批申请" in body, str(st))
     check("管理页列出待批申请（赵六）", "赵六" in body)
@@ -434,8 +481,12 @@ def part_web(base_url: str, state: Path):
     st, body = http(f"{base_url}/admin/usage?k={admin}&by=person")
     check("用量看板可打开", st == 200 and "用量" in body, str(st))
 
+    SESSION["cookie"] = ""                      # 段末登出：后面的段测的是匿名/地址边界
+    check("清掉会话后管理页又要登录", http(f"{base_url}/admin", cookie="")[0] == 401)
+
 
 # ---------------------------------------------------------------- ⑤ 追踪
+
 def part_track(state: Path, env: dict, zhang: dict):
     print("\n⑤ 追踪：审计留痕 + 用量报表 + 新申请提醒")
     audit = state / "audit" / "kb1.jsonl"
@@ -469,6 +520,7 @@ def part_track(state: Path, env: dict, zhang: dict):
 
 
 # ---------------------------------------------------------------- ⑥ 直接取文件（门户下载 + 限时链接）
+
 def part_download(site: str, state: Path, zhang: dict, lib_root: str):
     print("\n⑥ 同事直接拿文件：门户下载页 / 单篇 / 打包 / 限时签名链接")
     import io, time as _t, zipfile
@@ -498,7 +550,8 @@ def part_download(site: str, state: Path, zhang: dict, lib_root: str):
 
     # 没带地址 → 打不开
     st, body = http(f"{base}/files")
-    check("没有地址打开 /files → 401 并提示怎么拿地址", st == 401 and "你的地址" in body, str(st))
+    check("没有地址、也没登录 → 打不开 /files（401）",
+          st == 401 and ("需要登录" in body or "你的地址" in body), str(st))
 
     # 用自己的地址打开 → 只列他有权看的
     st, body = http(f"{site}/kb-{zh_tok}/files")
@@ -993,6 +1046,106 @@ async def part_users(site: str, state: Path, zhang: dict):
     rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     for tool in ("kb_user_update", "kb_rotate", "kb_user_delete"):
         check(f"审计留痕：{tool}", any(r.get("tool") == tool and r.get("actor") == "admin" for r in rows))
+
+# ---------------------------------------------------------------- ⑩ 登录闸门与账号
+async def part_auth(site: str, state: Path, admin_pw: str):
+    """登录：网页不再谁都能看；账号密码 + 签名 cookie；同事只看自己等级。"""
+    print("\n⑩ 登录闸门：账号密码 / 会话 cookie / 同事只能看自己的")
+    import kb_auth as AUTH
+    import kb_access as ACC
+    base = site + "/w-kb1-test"
+
+    # ---- 未登录：什么都看不到 ----
+    st, body = http(f"{base}/admin", cookie="")
+    check("未登录、不带管理令 → 管理页进不去（401）",
+          st == 401 and "需要登录" in body, f"HTTP {st}")
+    st, body = http(f"{base}/files", cookie="")
+    check("未登录 → 资料下载页也进不去", st == 401 and "需要登录" in body, f"HTTP {st}")
+    st, body = http(f"{base}/request", cookie="")
+    check("未登录 → 申请页也要登录（默认不公开申请）", st == 401, f"HTTP {st}")
+    st, body = http(f"{base}/login", cookie="")
+    check("登录页本身可访问，且带用户名/密码/记住我",
+          st == 200 and 'name="user"' in body and 'name="pw"' in body and "记住我" in body, f"HTTP {st}")
+
+    # ---- 错密码 + 限速 ----
+    st, body = login(site + "/w-kb1-test", "admin", "definitely-wrong")
+    check("密码错 → 401 且统一提示（不暴露账号是否存在）",
+          st == 401 and "用户名或密码不对" in body, f"HTTP {st}")
+    for _ in range(4):
+        login(site + "/w-kb1-test", "admin", "definitely-wrong")
+    st, body = login(site + "/w-kb1-test", "admin", admin_pw)
+    check("连错 5 次 → 锁定（正确的密码也先不让进）",
+          st == 401 and "连错太多次" in body, body[:80])
+    AUTH.set_account(state, "admin", role="admin", password=admin_pw, person="主人")   # 解锁（等价于重置）
+    st, body = login(site + "/w-kb1-test", "admin", admin_pw)
+    check("重置后再登录 → 成功", st == 200 and "登录成功" in body, f"HTTP {st}")
+    check("登录后拿到的是签名 cookie（HttpOnly/SameSite）",
+          SESSION["cookie"].startswith("lh_sess="), SESSION["cookie"][:20])
+
+    # ---- 会话 cookie 的安全性 ----
+    good = SESSION["cookie"]
+    bad = good[:-2] + ("aa" if not good.endswith("aa") else "bb")
+    st, body = http(f"{base}/admin", cookie=bad)
+    check("cookie 被改一个字符 → 立刻失效", st == 401, f"HTTP {st}")
+    exp = AUTH.make_cookie(state, {"user": "admin", "role": "admin"}, minutes=-1)
+    st, body = http(f"{base}/admin", cookie=f"lh_sess={exp}")
+    check("过期 cookie → 失效", st == 401, f"HTTP {st}")
+
+    # ---- 登录后：管理页用会话即可（不必带管理令）----
+    st, body = http(f"{base}/admin")
+    check("管理员登录后 → 管理页直接可开（不用管理令）",
+          st == 200 and "已授权的同事" in body, f"HTTP {st}")
+
+    # ---- 同事账号：只看自己等级、进不了管理页 ----
+    ACC.upsert_user(state, "kb1", "登录测试员", ["L1-商务"], dept="测试")
+    AUTH.new_account(state, "logintester", role="member", person="登录测试员")
+    st, body = login(site + "/w-kb1-test", "logintester", AUTH.gen_password(6))   # 先错一次
+    _rec, pw2 = AUTH.reset_password(state, "logintester", length=12)
+    st, body = login(site + "/w-kb1-test", "logintester", pw2)
+    check("同事也能登录（他自己的账号）", st == 200 and "登录成功" in body, f"HTTP {st}")
+    st, body = http(f"{base}/admin")
+    check("同事登录后进不了管理页（角色不够）",
+          st in (401, 403) and ("不是管理员" in body or "需要登录" in body), f"HTTP {st}")
+    st, body = http(f"{base}/files")
+    check("同事登录后能看资料页（只列他等级的）", st == 200 and "我的资料" in body, f"HTTP {st}")
+    check("资料页里只有他有权限的等级", "L2-技术" not in body or "无权" in body, "")
+
+    # ---- 登出 ----
+    st, body = http(f"{base}/logout")
+    check("登出 → 会话作废", st == 200 and "已退出" in body, f"HTTP {st}")
+    SESSION["cookie"] = ""
+    st, body = http(f"{base}/admin", cookie="")
+    check("登出后管理页又要登录", st == 401, f"HTTP {st}")
+
+    # ---- 管理令仍兼容（老链接、脚本、cron）----
+    import kb_web as WEB
+    adm = WEB.ensure_admin_token(state)
+    st, body = http(f"{base}/admin?k={adm}", cookie="")
+    check("带上管理令 → 不登录也能进（兼容老链接/脚本）",
+          st == 200 and "已授权的同事" in body, f"HTTP {st}")
+
+    # ---- 密码与账号存储 ----
+    raw = (state / "state/portal-users.json").read_text(encoding="utf-8")
+    check("账号文件里没有明文密码", admin_pw not in raw and pw2 not in raw)
+    check("密码是加盐哈希（scrypt）", "scrypt$" in raw)
+    check("会话签名密钥是 0600 的独立文件",
+          (state / "state/portal-secret").exists()
+          and (state / "state/portal-secret").stat().st_mode & 0o777 == 0o600)
+    st, body = http(f"{base}/admin/pass", data={"k": adm, "person": "登录测试员", "user": "logintester",
+                                                "action": "save"})
+    check("管理页能给同事重置网页密码（只显示一次）",
+          st == 200 and "临时密码" in body and "重置" in body, body[:90])
+
+    # ---- 审计 ----
+    rows = [json.loads(l) for l in (state / "audit/kb1.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+    check("审计里有登录成功", any(r.get("tool") == "portal_login" and r.get("ok") for r in rows))
+    check("审计里有登录失败", any(r.get("tool") == "portal_login" and r.get("ok") is False for r in rows))
+    check("审计里有登出", any(r.get("tool") == "portal_logout" for r in rows))
+    check("登录审计带了 IP 与 UA 字段",
+          any("ip" in r and "ua" in r for r in rows if r.get("tool") == "portal_login"))
+
+
+
 # ---------------------------------------------------------------- main
 async def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="lh-kb-"))
@@ -1015,10 +1168,13 @@ async def main() -> int:
             return 2
 
         import config as C
+        import kb_auth as AUTH
         cfg = C.windows()["kb1"]
+        _arec, ADMINPW = AUTH.new_account(state, "admin", role="admin", person="主人")
         zhang = part_cli(env, state, cfg)
+        await part_auth(base_url.replace("/w-kb1-test", ""), state, ADMINPW)
         await part_mcp(base_url, state, zhang)
-        part_web(base_url, state)
+        part_web(base_url, state, ADMINPW)
         site = base_url.replace("/w-kb1-test", "")
         link_test = part_download(site, state, zhang, str(lib))
         await with_session(f"{site}/kb-{zhang['token']}", link_test)

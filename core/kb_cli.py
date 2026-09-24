@@ -17,6 +17,9 @@
   kb_cli.py edit <窗口> --name 张三 --levels "L1-商务,L3-核心" --days 90 --dept 技术部 --note "XX 项目"
   kb_cli.py edit <窗口> --name 张三 --rename 张三丰        # 改名（地址不变）
   kb_cli.py rm <窗口> --name 张三 --yes                   # 彻底删除
+  kb_cli.py passwd <窗口> --admin                          # 给自己设管理员网页密码（打印一次）
+  kb_cli.py passwd <窗口> --user zhangsan --person 张三     # 给同事开通网页账号
+  kb_cli.py accounts <窗口>                                # 列出网页账号
   kb_cli.py rotate <窗口> --name 张三                       换一条新地址（旧的立即失效）
   kb_cli.py revoke <窗口> --name 张三 [--enable]
   kb_cli.py invite <窗口> --name 张三 --out 文件.md [--level L] [--for 30d]
@@ -40,7 +43,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "core"))
 import config as C          # noqa: E402
 import kb as KB             # noqa: E402
-import kb_access as ACC     # noqa: E402
+import kb_access as ACC
+import kb_auth as AUTH     # noqa: E402
 import kb_ingest as ING     # noqa: E402
 import kb_usage as USAGE    # noqa: E402
 import kb_web as WEB        # noqa: E402
@@ -370,6 +374,64 @@ def cmd_decide(a) -> int:
     return 0
 
 
+def cmd_passwd(a) -> int:
+    """给别人（或自己）设网页登录密码：不指定就用随机强密码，明文只打印这一次。"""
+    cfg, _root, state = _win(a.window)
+    if a.admin:
+        user = (a.user or "admin").strip()
+        role, person = "admin", (a.person or "主人")
+    else:
+        user = (a.user or "").strip()
+        if not user:
+            print("❌ 要指定 --user 用户名（给同事开通网页账号），或用 --admin 给自己设")
+            return 1
+        role, person = "member", (a.person or user)
+    old = AUTH.get(state, user)
+    try:
+        if old:
+            rec, pw = AUTH.reset_password(state, user, length=a.length) if not a.password else \
+                AUTH.set_account(state, user, role=old.get("role") or role,
+                                 password=a.password, person=old.get("person") or person)[:2]
+            word = "重置"
+        else:
+            if a.password:
+                rec = AUTH.set_account(state, user, role=role, password=a.password, person=person)[0]
+                pw = a.password
+            else:
+                rec, pw = AUTH.new_account(state, user, role=role, person=person, length=a.length)
+            word = "开通"
+    except ValueError as e:
+        print(f"❌ {e}")
+        return 1
+    base = _public_url(cfg, a.window).rstrip("/")
+    print(f"✅ 已{word} {'管理员' if rec.get('role') == 'admin' else '同事'}账号")
+    print(f"   登录地址：{base}/login")
+    print(f"   用户名：  {user}")
+    print(f"   密码：    {pw}      ← 只显示这一次，请立刻保存/转发")
+    if rec.get("role") != "admin":
+        u = ACC.get_user(state, a.window, person)
+        lv = "、".join((u or {}).get("levels") or []) or "（注意：这位同事还没有资料等级，登录后看不到资料）"
+        print(f"   资料等级：{lv}")
+    return 0
+
+
+def cmd_accounts(a) -> int:
+    """列出网页账号（谁有账号、什么角色、上次登录）。"""
+    _cfg, _root, state = _win(a.window)
+    rows = AUTH.list_accounts(state)
+    if not rows:
+        print("还没有任何网页账号。给自己开一个：bash lighthouse.sh kb passwd " + a.window + " --admin")
+        return 0
+    print(f"{'用户名':<14} {'角色':<8} {'绑定同事':<12} {'密码':<6} {'锁定':<6} 上次登录")
+    for r in rows:
+        print(f"{(r['user'] or ''):<14} {('管理员' if r['role'] == 'admin' else '同事'):<8} "
+              f"{(r['person'] or '-'):<12} {('有' if r['has_pw'] else '无'):<6} "
+              f"{('是' if r['locked'] else '否'):<6} "
+              f"{(str(r['last_login'])[:16].replace('T', ' ') if r['last_login'] else '从未登录')}")
+    print(f"\n共 {len(rows)} 个账号；管理页里每个同事行也能「开通账号 / 重置密码」。")
+    return 0
+
+
 def cmd_edit(a) -> int:
     """改同事的等级/部门/备注/有效期/启用状态/姓名（地址不变）—— 与网页同一个台账层。"""
     cfg, _root, state = _win(a.window)
@@ -647,6 +709,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_edit)
     p = sub.add_parser("rm"); p.add_argument("window"); p.add_argument("--name", required=True)
     p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_rm)
+    p = sub.add_parser("passwd"); p.add_argument("window")
+    p.add_argument("--user", default=None, help="用户名（给同事开通网页账号）")
+    p.add_argument("--admin", action="store_true", help="给自己（管理员）设密码")
+    p.add_argument("--password", default=None, help="自己指定密码（不给就随机生成）")
+    p.add_argument("--person", default=None, help="绑定到哪位同事（默认同名）")
+    p.add_argument("--length", type=int, default=14); p.set_defaults(fn=cmd_passwd)
+    p = sub.add_parser("accounts"); p.add_argument("window"); p.set_defaults(fn=cmd_accounts)
     p = sub.add_parser("invite"); p.add_argument("window"); p.add_argument("--name", required=True); p.add_argument("--out", required=True); p.add_argument("--level", default=""); p.add_argument("--for", dest="for_", default=None); p.add_argument("--note", default=""); p.set_defaults(fn=cmd_invite)
     p = sub.add_parser("notify"); p.add_argument("window"); p.add_argument("--ack", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_notify)
     p = sub.add_parser("usage"); p.add_argument("window"); p.add_argument("--days", type=int, default=7); p.add_argument("--by", choices=["person", "day", "doc", "tool"], default="person"); p.add_argument("--csv", action="store_true"); p.set_defaults(fn=cmd_usage)
